@@ -3,7 +3,7 @@
 
   "athlete": {
     "hr_max_override": null,
-    "hr_rest_fallback": 53
+    "hr_rest_fallback": 60
   },
 
   "aerobic": {
@@ -35,8 +35,8 @@
     "label": "Running",
     "unit": "km",
     "match": ["Running"],
-    "weekly_cap": 9,
-    "cap_note": "Phase A cap: 9 km"
+    "weekly_cap": 30,
+    "cap_note": "current phase cap"
   },
 
   "form_metric": {
