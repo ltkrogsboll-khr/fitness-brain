@@ -1,0 +1,99 @@
+{
+  "_comment": "Preset for a runner managing shin load. Copy to config.json and edit. Every key is optional — anything you leave out falls back to the neutral defaults in config.py. The `rationale` strings are HTML and appear in the dashboard's ? popovers.",
+
+  "athlete": {
+    "hr_max_override": null,
+    "hr_rest_fallback": 53
+  },
+
+  "aerobic": {
+    "label": "Aerobic",
+    "unit": "TRIMP",
+    "acwr_ceiling": 1.5,
+    "rationale": "<p>This is the fitness channel — the thing worth protecting. Because cycling and swimming score TRIMP but zero impact km, aerobic load can move off the legs without disappearing.</p><p>You want this <b>flat or gently rising</b>, including in weeks where the km bars drop. A collapse means fitness is leaking while the shins get looked after; a spike means fatigue. Its ceiling is looser than the impact ceiling, because the cardiovascular system recovers in days where bone takes weeks.</p>"
+  },
+
+  "mechanical": {
+    "enabled": true,
+    "label": "Impact",
+    "noun": "impact",
+    "unit": "weighted km",
+    "acwr_ceiling": 1.3,
+    "warn_ratio": 1.15,
+    "weights": {
+      "Running": 1.0,
+      "Trail Running": 1.15,
+      "Treadmill Running": 0.85,
+      "Walking": 0.25,
+      "Hiking": 0.3
+    },
+    "rationale": "<p>It gets its own chart because bone and tendon adapt on a much slower clock than heart and lungs. Your aerobic system can happily absorb a jump in mileage weeks before the tibia can, and that gap is where shin pain lives.</p><p>Steady bars creeping up beat a sawtooth, even at the same monthly total.</p>"
+  },
+
+  "primary": {
+    "enabled": true,
+    "label": "Running",
+    "unit": "km",
+    "match": ["Running"],
+    "weekly_cap": 9,
+    "cap_note": "Phase A cap: 9 km"
+  },
+
+  "form_metric": {
+    "enabled": true,
+    "field": "cadence",
+    "label": "Cadence",
+    "unit": "spm",
+    "target": 168,
+    "floor": 162,
+    "rationale": "<p>At any given pace, more steps per minute means a shorter stride, a foot landing closer under your hip, less braking on each contact and less vertical drop into it. The same work gets spread over more, lighter impacts, and peak load through the tibia falls — raising cadence around 5–10% is the form change with the most evidence behind it, and it's trainable in weeks with nothing but a metronome.</p><p>The thing to look for is whether <b>slow</b> runs hold their turnover. A dip means you slowed down by loafing the stride out rather than shortening it, which is the exact loading pattern to avoid. Fast runs holding cadence while easy runs sag is the classic shape.</p>"
+  },
+
+  "benchmark": {
+    "enabled": true,
+    "hr": 140,
+    "min_form": 145,
+    "rationale": "<p>Expect it to look worse for 2–3 weeks while cadence rewires; that cost is known and priced in.</p>"
+  },
+
+  "readiness": {
+    "sleep_score_warn": 70,
+    "sleep_debt_h": 2.0,
+    "rhr_above_baseline": 3,
+    "rhr_veto": 56
+  },
+
+  "journal": {
+    "fields": [
+      {
+        "key": "shin",
+        "label": "Shin",
+        "split": ["L", "R"],
+        "min": 0,
+        "max": 10,
+        "default": 1
+      }
+    ],
+    "placeholder": "note — cadence, how it felt, next-morning shins…"
+  },
+
+  "plan": {
+    "kinds": {
+      "run": { "label": "RUN", "complete_when": "primary_volume" },
+      "cross": { "label": "CROSS", "complete_when": "any_activity" },
+      "strength": {
+        "label": "STRENGTH",
+        "complete_when": "activity_matches",
+        "match": ["other", "floor", "strength"]
+      },
+      "rest": { "label": "REST", "complete_when": "always" }
+    }
+  },
+
+  "coach": {
+    "role": "running coach",
+    "system": "a shin-aware training system",
+    "safety": "If they report focal point tenderness on the bone, pain at rest or at night, pain worsening week over week, or limping, say clearly that this is the escalation pattern in the policy's escalation section and belongs with a physio, not a plan adjustment.",
+    "journal_examples": "a shin score, how a run actually felt, next-morning symptoms, a life event affecting training, equipment changes, a goal change"
+  }
+}

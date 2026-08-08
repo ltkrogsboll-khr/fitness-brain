@@ -165,7 +165,7 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.7}
 #log{min-height:40px;max-height:440px;overflow:auto;display:flex;
   flex-direction:column;gap:12px;padding:2px}
-#log:empty::before{content:"Ask about the plan, a rule, how a run went, or what to do about the shins today.";
+#log:empty::before{content:"Ask about the plan, a rule, how a session went, or what to do about today.";
   color:var(--muted);font-size:13px}
 .msg{max-width:88%;padding:9px 12px;border-radius:11px;white-space:pre-wrap;
   word-wrap:break-word}
@@ -247,7 +247,8 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 <script>
 const $ = s => document.querySelector(s);
 const tip = $('#tip');
-let D = null;
+let D = null;   // payload from /api/data
+let C = null;   // D.config — every sport-specific label and threshold
 
 const fmt = (v, d=1) => v==null ? '–' : (+v).toFixed(d);
 const paceStr = s => s==null ? '–' : `${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
@@ -460,8 +461,11 @@ function formChart(mount, sessions){
 }
 
 // --- pace vs HR scatter ------------------------------------------------------
-function paceChart(mount, runs){
-  const pts = runs.filter(r=>r.pace && r.hr && r.cadence>145);
+function paceChart(mount, sessions){
+  const bhr = C.benchmark.hr, floor = C.benchmark.min_form;
+  // min_form drops sessions that weren't really the thing being measured —
+  // a run-walk drags pace down without saying anything about efficiency.
+  const pts = sessions.filter(r=>r.pace && r.hr && (floor==null || r.form>floor));
   if(!pts.length) return;
   const cutoff = new Date(Date.now()-56*864e5).toISOString().slice(0,10);
   const w=520,h=200, f=frame(w,h,{t:14,r:14,b:30,l:46});
@@ -483,12 +487,12 @@ function paceChart(mount, runs){
       fill:'var(--muted)','font-size':10},[document.createTextNode(t.toFixed(0))])));
   f.svg.appendChild(el('text',{x:(f.x0+f.x1)/2,y:f.y0+28,'text-anchor':'middle',
     fill:'var(--muted)','font-size':10},[document.createTextNode('avg HR (bpm)')]));
-  if(hMin<140 && hMax>140){
-    const x=sx(140);
+  if(hMin<bhr && hMax>bhr){
+    const x=sx(bhr);
     f.svg.appendChild(el('line',{x1:x,x2:x,y1:f.y1,y2:f.y0,stroke:'var(--muted)',
       'stroke-width':1.5,'stroke-dasharray':'4 4'}));
     f.svg.appendChild(el('text',{x:x+4,y:f.y1+10,fill:'var(--muted)','font-size':10,
-      'font-weight':600},[document.createTextNode('HR 140')]));
+      'font-weight':600},[document.createTextNode('HR '+bhr)]));
   }
   pts.forEach(p=>{
     const recent = p.date >= cutoff;
@@ -496,7 +500,8 @@ function paceChart(mount, runs){
       fill:recent?'var(--ink)':'var(--axis)', stroke:'var(--surface)','stroke-width':2,
       'fill-opacity':recent?1:.65});
     c.addEventListener('mousemove', e => showTip(e,
-      `${p.date}\n${paceStr(p.pace)}/km at HR ${p.hr.toFixed(0)}\n${fmt(p.km,2)} km · ${p.cadence.toFixed(0)} spm`));
+      `${p.date}\n${paceStr(p.pace)}/km at HR ${p.hr.toFixed(0)}\n${fmt(p.km,2)} km${
+        p.form!=null ? ` · ${p.form.toFixed(0)} ${C.form_metric.unit}` : ''}`));
     c.addEventListener('mouseleave', hideTip);
     f.svg.appendChild(c);
   });
@@ -517,84 +522,113 @@ function tile(c){
     <div class="val">${c.val}</div>
     <div class="note">${c.note||''}</div></div>`;
 }
-const KIND = {run:'RUN', cross:'CROSS', strength:'STRENGTH', rest:'REST'};
+const kindLabel = k => (C.plan.kinds[k]||{}).label || (k||'').toUpperCase();
+const isRest = k => (C.plan.kinds[k]||{}).complete_when === 'always';
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function dayName(iso){
   const [y,m,d] = iso.split('-').map(Number);
   return DOW[new Date(Date.UTC(y,m-1,d)).getUTCDay()];
 }
 
-/* The six checks, and the only place a threshold is written down. Every
-   judgement on the page reads from this one list: the pill row is the list, the
-   reasons under the verdict are the entries that lit up, the tiles are the same
-   entries again with more room. Adding a metric here adds it in all three
-   places — which is the only arrangement in which the summary and the pills
-   cannot drift out of step with each other.
+/* The checks, and the only place in the UI a threshold is read. Every judgement
+   on the page reads from this one list: the pill row is the list, the reasons
+   under the verdict are the entries that lit up, the tiles are the same entries
+   again with more room. Adding a metric here adds it in all three places —
+   which is the only arrangement in which the summary and the pills cannot drift
+   out of step with each other.
+
+   The numbers themselves come from config.json, so the dashboard and the policy
+   the coach reads are quoting one source rather than two copies.
 
    `lvl` is 0 clear / 1 watch / 2 over the limit, or null when there is nothing
    to judge yet. `head` and `why` are the prose used if the check lights up, so
    a lit pill always has an explanation waiting for it upstairs. */
 function checks(){
   const s = D.stats;
-  const cadRun = D.runs.filter(r=>r.cadence).at(-1);
-  const cad = cadRun ? cadRun.cadence : null;
+  const mech = C.mechanical, aer = C.aerobic, prim = C.primary,
+        fmc = C.form_metric, rd = C.readiness;
+  const formS = fmc.enabled ? D.primary_sessions.filter(r=>r.form).at(-1) : null;
+  const form = formS ? formS.form : null;
   const hrvLow = s.hrv_night!=null && s.hrv_lo!=null && s.hrv_night < s.hrv_lo;
+  const out = [];
 
-  const lImpact  = s.impact_acwr==null ? null
-                 : s.impact_acwr>1.3 ? 2 : s.impact_acwr>1.15 ? 1 : 0;
-  const lAerobic = s.aerobic_acwr==null ? null : s.aerobic_acwr>1.5 ? 2 : 0;
-  const lRun     = s.run_km_7d==null ? null : s.run_km_7d>9 ? 1 : 0;
-  const lHrv     = s.hrv_night==null ? null : hrvLow ? 1 : 0;
-  const lSleep   = s.sleep_score==null ? null : s.sleep_score<70 ? 1 : 0;
-  const lCad     = cad==null ? null : cad<162 ? 1 : 0;
+  if(mech.enabled){
+    const lvl = s.mech_acwr==null ? null
+              : s.mech_acwr>mech.acwr_ceiling ? 2
+              : (mech.warn_ratio && s.mech_acwr>mech.warn_ratio) ? 1 : 0;
+    const ceil = fmt(mech.acwr_ceiling,2);
+    out.push({
+      lvl, label:`${mech.label} ACWR`, long:`${mech.label} ACWR`,
+      val:fmt(s.mech_acwr,2),
+      note:`${fmt(s.mech_acute,1)} vs ${fmt(s.mech_chronic,1)} ${mech.unit} · ceiling ${ceil}`,
+      head:lvl===2 ? `${mech.label} load is over the ceiling`
+                   : `${mech.label} load is nearing the ceiling`,
+      why:lvl===2
+        ? `ACWR ${fmt(s.mech_acwr,2)} against a ${ceil} limit — ${fmt(s.mech_acute,1)}
+           ${mech.unit} this week versus a ${fmt(s.mech_chronic,1)} chronic average.`
+        : `ACWR ${fmt(s.mech_acwr,2)} — inside the ${ceil} limit but past
+           ${fmt(mech.warn_ratio,2)}, on ${fmt(s.mech_acute,1)} ${mech.unit} this week against a
+           ${fmt(s.mech_chronic,1)} chronic average. Train the week as written rather than
+           adding to it.`
+    });
+  }
 
-  return [{
-    lvl:lImpact, label:'Impact ACWR', long:'Impact ACWR',
-    val:fmt(s.impact_acwr,2),
-    note:`${fmt(s.impact_acute,1)} vs ${fmt(s.impact_chronic,1)} km · ceiling 1.30`,
-    head:lImpact===2 ? 'Impact load is over the ceiling'
-                     : 'Impact load is nearing the ceiling',
-    why:lImpact===2
-      ? `ACWR ${fmt(s.impact_acwr,2)} against a 1.30 limit — ${fmt(s.impact_acute,1)} km this week
-         versus a ${fmt(s.impact_chronic,1)} km chronic average. Policy §4: cut running 20% next week.`
-      : `ACWR ${fmt(s.impact_acwr,2)} — inside the 1.30 limit but past 1.15, on
-         ${fmt(s.impact_acute,1)} km this week against a ${fmt(s.impact_chronic,1)} km chronic
-         average. Run the week as written rather than adding to it.`
-  },{
-    lvl:lAerobic, label:'Aerobic ACWR', long:'Aerobic ACWR',
+  const ceilA = fmt(aer.acwr_ceiling,2);
+  out.push({
+    lvl: s.aerobic_acwr==null ? null : s.aerobic_acwr>aer.acwr_ceiling ? 2 : 0,
+    label:`${aer.label} ACWR`, long:`${aer.label} ACWR`,
     val:fmt(s.aerobic_acwr,2),
-    note:`${fmt(s.aerobic_acute,0)} vs ${fmt(s.aerobic_chronic,0)} · ceiling 1.50`,
-    head:'Aerobic load is over the ceiling',
-    why:`ACWR ${fmt(s.aerobic_acwr,2)} against a 1.50 limit — ${fmt(s.aerobic_acute,0)} TRIMP
-         versus a ${fmt(s.aerobic_chronic,0)} chronic average.`
-  },{
-    lvl:lRun, label:'Run, 7d', long:'Running, 7 days',
-    val:fmt(s.run_km_7d,1)+' km', note:'Phase A cap: 9 km',
-    head:'Weekly running is over the phase cap',
-    why:`${fmt(s.run_km_7d,1)} km in the last 7 days against the 9 km cap Phase A sets.
-         The cap is on volume alone — it holds even when the ACWR looks calm.`
-  },{
-    lvl:lHrv, label:'HRV', long:'Overnight HRV',
+    note:`${fmt(s.aerobic_acute,0)} vs ${fmt(s.aerobic_chronic,0)} · ceiling ${ceilA}`,
+    head:`${aer.label} load is over the ceiling`,
+    why:`ACWR ${fmt(s.aerobic_acwr,2)} against a ${ceilA} limit — ${fmt(s.aerobic_acute,0)}
+         ${aer.unit} versus a ${fmt(s.aerobic_chronic,0)} chronic average.`
+  });
+
+  if(prim.enabled && prim.weekly_cap){
+    out.push({
+      lvl: s.primary_km_7d==null ? null : s.primary_km_7d>prim.weekly_cap ? 1 : 0,
+      label:`${prim.label}, 7d`, long:`${prim.label}, 7 days`,
+      val:`${fmt(s.primary_km_7d,1)} ${prim.unit}`,
+      note:prim.cap_note || `cap: ${prim.weekly_cap} ${prim.unit}`,
+      head:`Weekly ${prim.label.toLowerCase()} is over the cap`,
+      why:`${fmt(s.primary_km_7d,1)} ${prim.unit} in the last 7 days against the
+           ${prim.weekly_cap} ${prim.unit} cap. The cap is on volume alone — it holds even
+           when the ACWR looks calm.`
+    });
+  }
+
+  out.push({
+    lvl: s.hrv_night==null ? null : hrvLow ? 1 : 0,
+    label:'HRV', long:'Overnight HRV',
     val:s.hrv_night==null ? '–' : fmt(s.hrv_night,0)+' ms',
     note:`baseline ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms`,
     head:'Overnight HRV below baseline',
-    why:`${fmt(s.hrv_night,0)} ms against a ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms baseline.
-         One signal only — a veto needs RHR ≥ 56 as well (RHR is ${fmt(s.rhr,0)}).`
+    why:`${fmt(s.hrv_night,0)} ms against a ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms baseline.${
+      rd.rhr_veto ? ` One signal only — a veto needs RHR ≥ ${rd.rhr_veto} as well
+      (RHR is ${fmt(s.rhr,0)}).` : ''}`
   },{
-    lvl:lSleep, label:'Sleep', long:'Last sleep',
+    lvl: s.sleep_score==null ? null : s.sleep_score<rd.sleep_score_warn ? 1 : 0,
+    label:'Sleep', long:'Last sleep',
     val:s.sleep_score==null ? '–' : fmt(s.sleep_score,0),
     note:`RHR ${fmt(s.rhr,0)} · ${s.sleep_date||''}`,
-    head:'Sleep score under 70',
+    head:`Sleep score under ${rd.sleep_score_warn}`,
     why:`${fmt(s.sleep_score,0)} on the night of ${s.sleep_date||'the last reading'}.
          One poor night is not a veto; it is a reason to keep the session easy.`
-  },{
-    lvl:lCad, label:'Cadence', long:'Last run cadence',
-    val:cad==null ? '–' : cad.toFixed(0)+' spm',
-    note:'floor 162 · target 168',
-    head:'Cadence under the floor',
-    why:`Last run ${fmt(cad,0)} spm, below the 162 floor and well under the
-         168 target. Shuffling raises bone load at the same pace.`
-  }];
+  });
+
+  if(fmc.enabled && fmc.floor){
+    out.push({
+      lvl: form==null ? null : form<fmc.floor ? 1 : 0,
+      label:fmc.label, long:`Last session ${fmc.label.toLowerCase()}`,
+      val:form==null ? '–' : `${form.toFixed(0)} ${fmc.unit}`,
+      note:`floor ${fmc.floor}${fmc.target ? ` · target ${fmc.target}` : ''}`,
+      head:`${fmc.label} under the floor`,
+      why:`Last session ${fmt(form,0)} ${fmc.unit}, below the ${fmc.floor} floor${
+        fmc.target ? ` and under the ${fmc.target} target` : ''}.`
+    });
+  }
+
+  return out;
 }
 
 const listing = xs => xs.length < 2 ? (xs[0] || '')
@@ -605,7 +639,7 @@ const listing = xs => xs.length < 2 ? (xs[0] || '')
 
    A check with no reading is not a passing check, so the verdict says what it
    could not see. "All clear" on three unmeasured channels is the kind of quiet
-   overstatement that gets someone to run on a shin that needed the rest. */
+   overstatement that gets someone to train on a body that needed the rest. */
 function assess(){
   const cs = checks();
   const lit = cs.filter(c => c.lvl >= 1).sort((a,b) => b.lvl - a.lvl);
@@ -617,7 +651,7 @@ function assess(){
   const verdict = blind ? 'Nothing measured yet'
                 : lvl===2 ? 'Back off'
                 : lvl===1 ? 'Proceed, but watch it' : 'All clear';
-  /* Named rather than counted — there are only ever six, and which one is
+  /* Named rather than counted — there are only ever a handful, and which one is
      missing changes what you'd do about it. */
   const gap = blind || !gaps.length ? ''
             : `${listing(gaps.map(c => c.label))} ${many?'have':'has'} not reported`;
@@ -668,13 +702,13 @@ function renderWeek(){
   const todayRow = wk.find(d => d.date === t);
   const fallback = todayRow || wk.find(d => d.date > t) || wk[wk.length-1];
   const sel = (picked && wk.find(d => d.date === picked)) || fallback;
-  const k = KIND[sel.kind] || KIND.rest;
+  const k = kindLabel(sel.kind);
   const when = sel.date === t ? 'Today'
     : sel === fallback ? 'Next up — ' + dayName(sel.date) + ' ' + sel.date.slice(8)
     : dayName(sel.date) + ' ' + sel.date.slice(8);
   const logged = sel.logged
     ? `<div style="color:var(--muted);font-size:12px;margin-top:3px">${sel.logged}${
-        sel.run_km ? ` · ${sel.run_km} km` : ''}</div>`
+        sel.primary_km ? ` · ${sel.primary_km} ${C.primary.unit}` : ''}</div>`
     : '';
   $('#todaycard').innerHTML = `
     <div class="today">
@@ -684,7 +718,7 @@ function renderWeek(){
         <div class="how">${sel.detail||''}</div>
       </div>
       <div style="text-align:right;white-space:nowrap">
-        ${sel.done && sel.kind!=='rest'
+        ${sel.done && !isRest(sel.kind)
           ? '<span class="chk ok">✓ logged</span>'
           : '<span style="color:var(--muted);font-size:12px">not logged yet</span>'}
         ${logged}
@@ -696,15 +730,15 @@ function renderWeek(){
   const back = $('#backtoday');
   if(back) back.onclick = () => { picked = null; renderWeek(); };
 
-  const sessions = wk.filter(d => d.kind !== 'rest');
+  const sessions = wk.filter(d => !isRest(d.kind));
   const doneN = sessions.filter(d => d.done).length;
-  const left = wk.filter(d => d.date > t && d.kind !== 'rest').length;
+  const left = wk.filter(d => d.date > t && !isRest(d.kind)).length;
   $('#weekcnt').textContent =
     `${doneN}/${sessions.length} sessions logged · ${left} still ahead`;
 
   $('#strip').innerHTML = wk.map(d=>{
     const past = d.date < t, isToday = d.date === t;
-    const mark = d.kind==='rest' ? ''
+    const mark = isRest(d.kind) ? ''
       : d.done ? '<span class="chk ok">✓</span>'
       : past ? '<span class="chk miss">missed</span>' : '';
     return `<button type="button" class="day ${isToday?'is-today':''} ${
@@ -716,22 +750,96 @@ function renderWeek(){
   }).join('');
 }
 
+/* Charts are declared, not hand-placed: each one says what it needs from config
+   and is skipped entirely when that isn't configured. A cyclist with no second
+   load channel gets a two-chart page, not two empty frames. */
+function renderCharts(){
+  const s = D.stats;
+  const cards = [];
+  if(C.mechanical.enabled) cards.push({
+    id:'mech', help:'mech',
+    title:`${C.mechanical.label} load per week (${C.mechanical.unit})`,
+    sub:`Dashed line = 28-day chronic average.`,
+    draw:m => barChart(m, D.weekly, 'mech_km', C.mechanical.unit, s.mech_chronic, 'chronic avg')
+  });
+  cards.push({
+    id:'aerobic', help:'aerobic',
+    title:`${C.aerobic.label} load per week (${C.aerobic.unit})`,
+    sub:'One currency for cardiovascular work across every activity.',
+    draw:m => barChart(m, D.weekly, 'trimp', C.aerobic.unit, s.aerobic_chronic, 'chronic avg')
+  });
+  if(C.form_metric.enabled && D.primary_sessions.some(r=>r.form)) cards.push({
+    id:'form', help:'form',
+    title:`${C.form_metric.label} per session`,
+    sub:C.form_metric.target
+      ? `Dashed line = ${C.form_metric.target} ${C.form_metric.unit} target.` : '',
+    draw:m => formChart(m, D.primary_sessions)
+  });
+  if(C.benchmark.enabled && D.primary_sessions.some(r=>r.pace && r.hr)) cards.push({
+    id:'pace', help:'pace',
+    title:'Pace against heart rate',
+    sub:`Faster is higher. The benchmark is pace at HR ${C.benchmark.hr} — down and left is better.`,
+    legend:true,
+    draw:m => paceChart(m, D.primary_sessions)
+  });
+
+  $('#charts').innerHTML = cards.map(c => `
+    <div class="card">
+      <div class="ctitle">${c.title}
+        <button class="info" data-help="${c.help}" aria-label="What is this chart?">?</button></div>
+      ${c.sub ? `<div class="csub">${c.sub}</div>` : ''}
+      ${c.legend ? `<div class="legend">
+          <span><i class="sw" style="background:var(--ink)"></i>Last 8 weeks</span>
+          <span><i class="sw" style="background:var(--axis)"></i>Earlier</span>
+        </div>` : ''}
+      <div id="c-${c.id}"></div>
+    </div>`).join('');
+  cards.forEach(c => c.draw($('#c-'+c.id)));
+  $('#trendcnt').textContent = cards.map(c => c.title.split(' (')[0].toLowerCase()).join(', ');
+  wireHelp();
+}
+
+/* The scored fields are whatever config says they are, so the widget and the
+   line the coach is told to write share one definition. */
+function renderJournalInput(){
+  const fs = C.journal.fields;
+  $('#jrow').innerHTML = fs.map(f => (f.split || [null]).map((side,i) => `
+    <label>${i===0 ? f.label : ''} ${side||''}
+      <input class="jf" data-key="${f.key}" data-side="${side||''}" type="number"
+        min="${f.min}" max="${f.max}" value="${f.default}" style="width:58px"></label>`).join('')
+  ).join('') + `
+    <input id="jn" placeholder="${C.journal.placeholder}" style="flex:1;min-width:220px">
+    <button class="primary" id="jsave">Log</button>`;
+  $('#jsave').onclick = saveJournal;
+}
+
+async function saveJournal(){
+  const d = new Date().toISOString().slice(0,10);
+  const parts = C.journal.fields.map(f => {
+    const ins = [...document.querySelectorAll(`.jf[data-key="${f.key}"]`)];
+    return f.split
+      ? `${f.key} ${ins.map(i => i.dataset.side + i.value).join('/')}`
+      : `${f.key} ${ins[0].value}`;
+  });
+  const line = [d, ...parts, `note: ${$('#jn').value||'-'}`].join(' | ');
+  await fetch('/api/journal',{method:'POST',body:JSON.stringify({line})});
+  $('#jn').value=''; await load();
+}
+
 function render(){
   $('#gen').textContent = `data through ${D.last14.at(-1)?.date ?? '?'} · built ${D.generated.replace('T',' ')}`;
 
   const a = assess();
   renderStatus(a);
   renderWeek();
+  renderCharts();
+  renderJournalInput();
 
-  barChart($('#c-km'), D.weekly, 'impact_km', 'impact km', D.stats.impact_chronic, 'chronic avg');
-  barChart($('#c-trimp'), D.weekly, 'trimp', 'TRIMP', D.stats.aerobic_chronic, 'chronic avg');
-  cadenceChart($('#c-cad'), D.runs);
-  paceChart($('#c-pace'), D.runs);
-
+  const pu = C.primary.enabled ? `${C.primary.label} ${C.primary.unit}` : 'km';
   $('#t14').innerHTML =
-    '<tr><th>Date</th><th>Day</th><th>Activities</th><th>Run km</th><th>TRIMP</th><th>Sleep</th><th>RHR</th><th>HRV</th></tr>' +
+    `<tr><th>Date</th><th>Day</th><th>Activities</th><th>${pu}</th><th>${C.aerobic.unit}</th><th>Sleep</th><th>RHR</th><th>HRV</th></tr>` +
     D.last14.slice().reverse().map(r=>`<tr><td>${r.date}</td><td>${r.dow||''}</td>
-      <td>${r.activities||'–'}</td><td>${r.run_km?fmt(r.run_km,2):'–'}</td>
+      <td>${r.activities||'–'}</td><td>${r.primary_km?fmt(r.primary_km,2):'–'}</td>
       <td>${r.trimp?fmt(r.trimp,0):'–'}</td><td>${r.sleep_score?fmt(r.sleep_score,0):'–'}</td>
       <td>${r.rhr?fmt(r.rhr,0):'–'}</td><td>${r.hrv_night?fmt(r.hrv_night,0):'–'}</td></tr>`).join('');
 
@@ -746,6 +854,8 @@ function render(){
 
 async function load(){
   D = await (await fetch('/api/data')).json();
+  C = D.config;            // labels, ceilings and targets — see config.json
+  HELP = buildHelp(C);
   render();
 }
 
@@ -754,13 +864,6 @@ $('#rebuild').onclick = async e => {
   const r = await (await fetch('/api/build',{method:'POST',body:'{}'})).json();
   await load();
   b.disabled=false; b.textContent = r.ok ? 'Rebuild from CSVs' : 'Rebuild failed';
-};
-
-$('#jsave').onclick = async () => {
-  const d = new Date().toISOString().slice(0,10);
-  const line = `${d} | shin L${$('#jl').value}/R${$('#jr').value} | note: ${$('#jn').value||'-'}`;
-  await fetch('/api/journal',{method:'POST',body:JSON.stringify({line})});
-  $('#jn').value=''; await load();
 };
 
 // Clicking a day swaps it into the card above; clicking it again goes back to

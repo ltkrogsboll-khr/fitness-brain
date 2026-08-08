@@ -36,8 +36,8 @@ section should be traceable to one of them.
 
 ## 1. Two load channels
 
-Garmin blends everything into one training load, which is why it recommends hard
-running when the aerobic system is fresh but the tibia is not.
+Most watches blend everything into one training load, which is why they recommend
+hard sessions when the aerobic system is fresh but the loaded tissue is not.
 
 | Channel | Measures | Target |
 |---|---|---|
@@ -227,7 +227,7 @@ Weekly, normally Sunday:
    ```
 
    The rationale prose goes around it, not inside it. Days tick off automatically
-   as matching activities appear in the Garmin data.
+   as matching activities appear in the imported data.
 
 4. Rules that felt wrong get changed *here* with a version bump — never improvised
    inside a single conversation

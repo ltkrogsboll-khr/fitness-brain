@@ -26,10 +26,14 @@ import sys
 import datetime as dt
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import config
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("PORT", "8765"))
 MODEL = "claude-opus-5"
 KEYCHAIN_SERVICE = "anthropic-api-key"
+
+CFG = config.load()
 
 
 def resolve_api_key():
@@ -122,8 +126,14 @@ def store_key_in_keychain():
     return 0
 
 # Chat is grounded in these every single turn -- that is what keeps advice stable
-# across conversations instead of re-derived from whatever got pasted in.
-SYSTEM_PREAMBLE = """You are the athlete's running coach for a shin-aware training system.
+# across conversations instead of re-derived from whatever got pasted in. The
+# sport-specific parts come from config so this prompt and the dashboard can't
+# describe two different systems.
+def build_preamble(cfg):
+    c = cfg["coach"]
+    safety = f"\nSafety: {c['safety'].strip()}\n" if c.get("safety", "").strip() else ""
+    fields = ", ".join(f["key"] for f in cfg["journal"]["fields"]) or "none"
+    return f"""You are the athlete's {c['role']} for {c['system']}.
 
 Below are three documents. Treat them as authoritative:
 
@@ -132,34 +142,28 @@ Below are three documents. Treat them as authoritative:
    compliant alternative. Do not quietly improvise around a rule. If a rule
    genuinely seems wrong, say that it should be changed in policy.md with a
    version bump rather than ignored for one conversation.
-2. CONTEXT -- generated from Garmin exports. Current loads, readiness, flags,
-   recent sessions.
-3. JOURNAL -- the athlete's own qualitative notes: shins, sleep, life, events.
+2. CONTEXT -- generated from the athlete's device exports. Current loads,
+   readiness, flags, recent sessions.
+3. JOURNAL -- the athlete's own qualitative notes: how the body felt, sleep,
+   life, events.
 
 Style: direct and concrete. Give numbers. Short answers for short questions --
 don't write an essay when a sentence does. You are talking to the person whose
 body this is; they know their own history.
-
-Safety: if they report focal point tenderness on the bone, pain at rest or at
-night, pain worsening week over week, or limping, say clearly that this is the
-escalation pattern in policy section 8 and belongs with a physio, not a plan
-adjustment.
-
+{safety}
 WRITING TO THE JOURNAL
 The journal is the durable memory of this system -- it is read back into every
 future conversation, while chat transcripts are only archived. So when the
 athlete tells you something durable that isn't already recorded, capture it by
 ending your reply with a line in exactly this form:
 
-    [[journal: YYYY-MM-DD | shin L#/R# | note: ...]]
+    [[journal: {config.journal_grammar(cfg)}]]
 
 It is stripped from what they see and appended to journal.md verbatim.
 
-Write one only for things worth re-reading weeks from now: a shin score, how a
-run actually felt, next-morning symptoms, a life event affecting training,
-equipment changes, a goal change. The shin field is optional -- omit it if they
-didn't mention shins, and use the date they are describing, not necessarily
-today.
+Write one only for things worth re-reading weeks from now: {c['journal_examples']}.
+The scored fields ({fields}) are optional -- omit any the athlete didn't mention,
+and use the date they are describing, not necessarily today.
 
 Do NOT write one for: questions, plan explanations, anything already in the
 journal, or your own advice. Most turns need no journal line at all. One line
@@ -188,7 +192,7 @@ def parse_week(md, by_date):
 
     Line format:  YYYY-MM-DD | kind | title | detail
     `done` is inferred from what actually got logged that day, so the strip
-    ticks itself off as Garmin data lands -- nothing to check by hand.
+    ticks itself off as new data lands -- nothing to check by hand.
     """
     out, inside = [], False
     for line in md.splitlines():
@@ -206,21 +210,25 @@ def parse_week(md, by_date):
         date, kind, title = parts[0], parts[1].lower(), parts[2]
         detail = parts[3] if len(parts) > 3 else ""
         d = by_date.get(date, {})
-        run_km = d.get("run_km") or 0.0
+        prim = d.get("primary_km") or 0.0
         trimp = d.get("trimp") or 0.0
         acts = (d.get("activities") or "").lower()
-        if kind == "run":
-            done = run_km > 0
-        elif kind == "cross":
-            done = trimp > 0 or bool(acts)
-        elif kind == "strength":
-            done = any(w in acts for w in ("other", "floor", "strength"))
+
+        spec = CFG["plan"]["kinds"].get(kind, {})
+        rule = spec.get("complete_when", "any_activity")
+        if rule == "primary_volume":
+            done = prim > 0
+        elif rule == "activity_matches":
+            done = any(w.lower() in acts for w in spec.get("match", []))
+        elif rule == "always":
+            done = True          # rest days need nothing
         else:
-            done = True  # rest days need nothing
+            done = trimp > 0 or bool(acts)
+
         out.append({"date": date, "kind": kind, "title": title,
                     "detail": detail, "done": bool(done),
                     "logged": d.get("activities") or "",
-                    "run_km": run_km or None})
+                    "primary_km": prim or None})
     return out
 
 
@@ -250,39 +258,42 @@ def iso_week(d):
 def build_payload():
     daily = rows("data/daily.csv")
     sess = rows("data/sessions.csv")
+    fm = CFG["form_metric"]
 
-    # Weekly aggregates -- the two load channels, kept as separate charts
+    # Weekly aggregates -- the load channels, kept as separate charts
     weeks = {}
     for r in daily:
         if not r.get("date"):
             continue
         k = iso_week(r["date"])
-        e = weeks.setdefault(k, {"week": k, "run_km": 0.0, "impact_km": 0.0,
+        e = weeks.setdefault(k, {"week": k, "primary_km": 0.0, "mech_km": 0.0,
                                  "trimp": 0.0, "start": r["date"]})
-        e["run_km"] += fl(r, "run_km") or 0.0
+        e["primary_km"] += fl(r, "primary_km") or 0.0
         # Weighted km -- the same unit the chronic average and ACWR are in, so
-        # the impact chart can compare a bar to its reference line directly.
-        e["impact_km"] += fl(r, "impact_km") or 0.0
+        # the chart can compare a bar to its reference line directly.
+        e["mech_km"] += fl(r, "mech_km") or 0.0
         e["trimp"] += fl(r, "trimp") or 0.0
         e["start"] = min(e["start"], r["date"])
     weekly = sorted(weeks.values(), key=lambda x: x["start"])[-26:]
     for w in weekly:
-        w["run_km"] = round(w["run_km"], 1)
-        w["impact_km"] = round(w["impact_km"], 1)
+        w["primary_km"] = round(w["primary_km"], 1)
+        w["mech_km"] = round(w["mech_km"], 1)
         w["trimp"] = round(w["trimp"], 0)
 
-    runs = [r for r in sess if "Running" in (r.get("type") or "")]
-    runs.sort(key=lambda r: r.get("datetime", ""))
-    run_pts = [
+    match = CFG["primary"]["match"]
+    prim = [r for r in sess
+            if match and any(m.lower() in (r.get("type") or "").lower() for m in match)]
+    prim.sort(key=lambda r: r.get("datetime", ""))
+    primary_sessions = [
         {
             "date": r.get("date"),
             "km": fl(r, "distance_km"),
-            "cadence": fl(r, "cadence"),
+            "form": fl(r, fm["field"]) if fm["enabled"] else None,
             "hr": fl(r, "avg_hr"),
             "pace": fl(r, "pace_s_per_km"),
             "te": fl(r, "aerobic_te"),
         }
-        for r in runs
+        for r in prim
         if fl(r, "distance_km")
     ]
 
@@ -300,36 +311,38 @@ def build_payload():
 
     a7 = dated[-7:]
     c28 = dated[-28:]
-    ac_im, ch_im = wsum(a7, "impact_km"), round(wsum(c28, "impact_km") / 4, 2)
+    ac_im, ch_im = wsum(a7, "mech_km"), round(wsum(c28, "mech_km") / 4, 2)
     ac_tr, ch_tr = wsum(a7, "trimp"), round(wsum(c28, "trimp") / 4, 1)
 
     journal = [l for l in read("journal.md").splitlines() if l.startswith("20")]
 
     pp = latest_plan_path()
     plan_md = read(pp) if pp else ""
-    by_date = {r["date"]: {"run_km": fl(r, "run_km"), "trimp": fl(r, "trimp"),
+    by_date = {r["date"]: {"primary_km": fl(r, "primary_km"),
+                           "trimp": fl(r, "trimp"),
                            "activities": r.get("activities")}
                for r in dated}
 
     return {
         "generated": dt.datetime.now().isoformat(timespec="seconds"),
         "today": dt.date.today().isoformat(),
+        "config": CFG,
         "plan_name": os.path.basename(pp) if pp else None,
         "week": parse_week(plan_md, by_date),
         "weekly": weekly,
-        "runs": run_pts,
+        "primary_sessions": primary_sessions,
         "last14": [
             {
                 "date": r["date"], "dow": r.get("dow"),
-                "run_km": fl(r, "run_km"), "trimp": fl(r, "trimp"),
+                "primary_km": fl(r, "primary_km"), "trimp": fl(r, "trimp"),
                 "sleep_score": fl(r, "sleep_score"), "rhr": fl(r, "rhr"),
                 "hrv_night": fl(r, "hrv_night"), "bb": fl(r, "body_battery"),
                 "activities": r.get("activities") or "",
             } for r in last14
         ],
         "stats": {
-            "impact_acute": ac_im, "impact_chronic": ch_im,
-            "impact_acwr": round(ac_im / ch_im, 2) if ch_im else None,
+            "mech_acute": ac_im, "mech_chronic": ch_im,
+            "mech_acwr": round(ac_im / ch_im, 2) if ch_im else None,
             "aerobic_acute": ac_tr, "aerobic_chronic": ch_tr,
             "aerobic_acwr": round(ac_tr / ch_tr, 2) if ch_tr else None,
             "hrv_night": fl(last_hrv, "hrv_night"),
@@ -338,7 +351,7 @@ def build_payload():
             "rhr": fl(last_sleep, "rhr"),
             "sleep_score": fl(last_sleep, "sleep_score"),
             "sleep_date": last_sleep.get("date"),
-            "run_km_7d": wsum(a7, "run_km"),
+            "primary_km_7d": wsum(a7, "primary_km"),
         },
         "journal": journal[-40:],
         "context_md": read("context.md"),
@@ -391,8 +404,12 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, {"ok": True, "line": line})
 
     def build(self):
+        global CFG
         r = subprocess.run([sys.executable, "build.py"], cwd=ROOT,
                            capture_output=True, text=True, timeout=120)
+        # Picked up without a restart, so editing config.json and hitting
+        # Rebuild is the whole loop.
+        CFG = config.load(force=True)
         return self._send(200, {"ok": r.returncode == 0,
                                 "out": (r.stdout + r.stderr).strip()})
 
@@ -453,7 +470,7 @@ class Handler(BaseHTTPRequestHandler):
 
         system = [{
             "type": "text",
-            "text": (f"{SYSTEM_PREAMBLE}\n\n"
+            "text": (f"{build_preamble(CFG)}\n\n"
                      f"===== POLICY (binding) =====\n{read('policy.md')}\n\n"
                      f"===== CONTEXT (generated) =====\n{read('context.md')}\n\n"
                      f"===== LATEST PLAN =====\n{latest_plan}\n\n"
