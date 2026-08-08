@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training</title>
+<style>
+:root{
+  color-scheme: light;
+  --surface:#fcfcfb; --page:#f9f9f7; --ink:#0b0b0b; --ink2:#52514e;
+  --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7;
+  --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+  --border:rgba(11,11,11,0.10);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --surface:#1a1a19; --page:#0d0d0d; --ink:#fff; --ink2:#c3c2b7;
+    --muted:#898781; --grid:#2c2c2a; --axis:#383835;
+    --border:rgba(255,255,255,0.10);
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);
+  font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 16px 72px}
+/* Masthead stays quiet; the section headings do the shaping. */
+h1{font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.11em;
+  color:var(--muted);margin:0}
+h2{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  font-size:28px;font-weight:600;letter-spacing:-.02em;color:var(--ink);
+  margin:52px 0 16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+h2 .sub{font-size:12.5px;font-weight:400;letter-spacing:0;color:var(--muted)}
+h2 .sub code{font-size:11.5px}
+h2 button{margin-left:auto;align-self:center}
+header + h2{margin-top:32px}
+@media(max-width:600px){h2{font-size:22px;margin:38px 0 14px}}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+header .sub{color:var(--muted);font-size:12px}
+button{font:inherit;padding:6px 12px;border-radius:7px;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--ink2)}
+button:hover{border-color:var(--muted);color:var(--ink)}
+button.primary{background:var(--ink);color:var(--page);border-color:transparent}
+button.primary:hover{opacity:.85;color:var(--page)}
+button:disabled{opacity:.5;cursor:default}
+.card{background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+/* --- status --------------------------------------------------------------- */
+/* Colour appears only as small state dots — never as coloured type. */
+.status{padding:17px 19px;border-radius:12px;background:var(--surface);
+  border:1px solid var(--border)}
+.status .verdict{display:flex;align-items:center;gap:9px;font-size:20px;
+  font-weight:600;line-height:1.25;letter-spacing:-.015em}
+.status .verdict .dot{width:9px;height:9px;margin:0}
+.status .reasons{margin-top:11px;padding-top:3px;border-top:1px solid var(--border)}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px;padding-top:13px;
+  border-top:1px solid var(--border)}
+.chip{display:flex;align-items:center;gap:6px;font-size:12.5px;
+  padding:5px 11px;border-radius:999px;border:1px solid var(--border);
+  background:var(--page)}
+.chip .k{color:var(--muted)}
+.chip b{font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink)}
+.chip .dot{width:6px;height:6px;margin:0}
+/* --- disclosure ----------------------------------------------------------- */
+details.dis{background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;margin-top:8px}
+details.dis>summary{list-style:none;cursor:pointer;user-select:none;
+  padding:11px 14px;display:flex;align-items:center;gap:9px;
+  font-size:13px;font-weight:600;color:var(--ink2)}
+details.dis>summary::-webkit-details-marker{display:none}
+details.dis>summary::before{content:"›";font-size:17px;line-height:1;
+  color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+details.dis[open]>summary::before{transform:translateY(-1px) rotate(90deg)}
+details.dis>summary:hover{color:var(--ink)}
+details.dis>summary .cnt{margin-left:auto;font-weight:400;color:var(--muted);
+  font-size:12px;text-align:right}
+details.dis .body{padding:2px 14px 14px}
+/* --- plan ----------------------------------------------------------------- */
+.today{display:flex;gap:14px;align-items:flex-start;padding:17px 19px;
+  border-radius:12px;background:var(--surface);border:1px solid var(--border);
+  margin-bottom:8px}
+.today .when{font-size:11px;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--muted);font-weight:700}
+.today .what{font-size:20px;font-weight:600;letter-spacing:-.015em;margin:2px 0 3px}
+.today .how{color:var(--ink2);font-size:13.5px}
+.strip{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+@media(max-width:820px){.strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* The strip is a picker: a card carries only its name and title, and clicking
+   it swaps the detail into the single card above. */
+.day{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:10px;min-height:66px;display:flex;flex-direction:column;gap:2px;
+  cursor:pointer;text-align:left;font:inherit;color:inherit;width:100%}
+.day:hover{border-color:var(--muted)}
+.day.is-today{border-color:var(--muted)}
+.day.is-sel{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.day.past{opacity:.5}
+.day.past.is-sel{opacity:1}
+.day .dn{font-size:11px;color:var(--muted);font-weight:700;
+  display:flex;justify-content:space-between;align-items:center;gap:6px}
+.day .tt{font-size:13px;font-weight:600;line-height:1.25;margin-top:2px}
+.chk{font-size:12px;font-weight:700;color:var(--ink2)}
+.chk.miss{color:var(--muted);font-weight:600}
+.tile .label{color:var(--muted);font-size:11px;text-transform:uppercase;
+  letter-spacing:.05em;display:flex;align-items:center;gap:5px}
+.tile .label .dot{width:6px;height:6px;margin:0}
+.tile .val{font-size:25px;font-weight:600;margin-top:3px;line-height:1.15;
+  letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .note{color:var(--muted);font-size:12px;margin-top:2px}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:12px}
+.ctitle{font-size:13px;font-weight:600;margin-bottom:1px;
+  display:flex;align-items:center;gap:6px}
+.csub{font-size:11px;color:var(--muted);margin-bottom:8px}
+/* --- chart help ----------------------------------------------------------- */
+/* A chart that needs a paragraph to read correctly should carry that paragraph,
+   but not in the layout — it's read once and then never again. */
+.info{width:15px;height:15px;padding:0;border-radius:50%;flex:none;
+  border:1px solid var(--border);background:var(--page);color:var(--muted);
+  font-size:10px;font-weight:700;line-height:1;cursor:help;
+  display:inline-flex;align-items:center;justify-content:center}
+.info:hover,.info:focus-visible,.info.pin{border-color:var(--muted);color:var(--ink)}
+#help{position:fixed;z-index:60;width:min(340px,calc(100vw - 24px));
+  padding:13px 15px;border-radius:10px;background:var(--surface);
+  border:1px solid var(--border);box-shadow:0 8px 28px rgba(0,0,0,.16);
+  font-size:12.5px;line-height:1.5;color:var(--ink2);
+  opacity:0;pointer-events:none;transition:opacity .12s}
+#help.on{opacity:1}
+#help.pin{pointer-events:auto}
+#help h5{margin:0 0 7px;font-size:11px;color:var(--ink);font-weight:700;
+  text-transform:uppercase;letter-spacing:.07em}
+#help p{margin:0 0 8px}
+#help p:last-child{margin:0}
+#help b{color:var(--ink);font-weight:600}
+svg{display:block;width:100%;height:auto;overflow:visible}
+/* --- assessment ----------------------------------------------------------- */
+.flag{display:flex;gap:9px;align-items:flex-start;padding:9px 2px;
+  font-size:13.5px;line-height:1.45;border-bottom:1px solid var(--grid)}
+.flag:last-child{border-bottom:none}
+.flag b{font-weight:650}
+.flag .why{color:var(--ink2)}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:6px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;
+  font-variant-numeric:tabular-nums}
+th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;
+  text-transform:uppercase;letter-spacing:.04em;padding:5px 8px;
+  border-bottom:1px solid var(--axis)}
+td{padding:5px 8px;border-bottom:1px solid var(--grid)}
+tr:last-child td{border-bottom:none}
+.legend{display:flex;gap:14px;font-size:11.5px;color:var(--ink2);margin-bottom:6px}
+.legend span{display:flex;align-items:center;gap:5px}
+.sw{width:9px;height:9px;border-radius:2px}
+#tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .1s;
+  background:var(--ink);color:var(--surface);padding:5px 8px;border-radius:6px;
+  font-size:12px;z-index:50;white-space:pre;font-variant-numeric:tabular-nums}
+.jrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+input,textarea{font:inherit;background:var(--page);color:var(--ink);
+  border:1px solid var(--border);border-radius:7px;padding:7px 9px}
+input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
+.jlist{font-size:12px;color:var(--ink2);max-height:190px;overflow:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.7}
+#log{min-height:40px;max-height:440px;overflow:auto;display:flex;
+  flex-direction:column;gap:12px;padding:2px}
+#log:empty::before{content:"Ask about the plan, a rule, how a run went, or what to do about the shins today.";
+  color:var(--muted);font-size:13px}
+.msg{max-width:88%;padding:9px 12px;border-radius:11px;white-space:pre-wrap;
+  word-wrap:break-word}
+.me{align-self:flex-end;background:var(--ink);color:var(--page)}
+.me code{background:transparent;border:none;color:inherit}
+.bot{align-self:flex-start;background:var(--page);border:1px solid var(--border)}
+.bot code{background:var(--surface);padding:1px 4px;border-radius:4px;
+  font-size:12px;border:1px solid var(--border)}
+.bot h4{margin:10px 0 4px;font-size:13px}
+.bot ul{margin:6px 0;padding-left:20px}
+.composer{display:flex;gap:8px;margin-top:10px}
+.composer textarea{flex:1;resize:vertical;min-height:44px;max-height:180px}
+.hint{color:var(--muted);font-size:12px;margin-top:6px}
+.err{color:var(--crit)}
+</style>
+</head>
+<body>
+<div id="tip"></div>
+<div id="help" role="tooltip"></div>
+<div class="wrap">
+
+<header>
+  <h1>Training</h1>
+  <span class="sub" id="gen">loading…</span>
+  <span style="flex:1"></span>
+  <button id="rebuild">Rebuild from CSVs</button>
+</header>
+
+<h2>Status</h2>
+<div id="status"></div>
+
+<details class="dis" id="d-metrics">
+  <summary>The numbers behind it <span class="cnt">loads, readiness, cadence</span></summary>
+  <div class="body">
+    <div class="tiles" id="tiles"></div>
+  </div>
+</details>
+
+<h2>Plan <span class="sub" id="planname"></span></h2>
+<div id="todaycard"></div>
+
+<details class="dis" id="d-week" open>
+  <summary>Rest of the week <span class="cnt" id="weekcnt"></span></summary>
+  <div class="body"><div class="strip" id="strip"></div></div>
+</details>
+
+<h2>Detail</h2>
+
+<details class="dis">
+  <summary>Trends <span class="cnt">volume, aerobic load, cadence, pace vs HR</span></summary>
+  <div class="body">
+    <div class="charts">
+      <div class="card">
+        <div class="ctitle">Impact load per week (weighted km)
+          <button class="info" data-help="km" aria-label="What is this chart?">?</button></div>
+        <div class="csub">Running 1.0 · treadmill 0.85 · walking 0.25 · bike and swim 0.
+          Dashed line = 28-day chronic average.</div>
+        <div id="c-km"></div>
+      </div>
+      <div class="card">
+        <div class="ctitle">Aerobic load per week (TRIMP)
+          <button class="info" data-help="trimp" aria-label="What is this chart?">?</button></div>
+        <div class="csub">Held steady by cycling and swimming while running is capped.</div>
+        <div id="c-trimp"></div>
+      </div>
+      <div class="card">
+        <div class="ctitle">Cadence per run
+          <button class="info" data-help="cad" aria-label="What is this chart?">?</button></div>
+        <div class="csub">Dashed line = 168 spm target. Dips are shuffling on slow runs.</div>
+        <div id="c-cad"></div>
+      </div>
+      <div class="card">
+        <div class="ctitle">Pace against heart rate
+          <button class="info" data-help="pace" aria-label="What is this chart?">?</button></div>
+        <div class="csub">Faster is higher. The benchmark is pace at HR 140 — down and left is better.</div>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--ink)"></i>Last 8 weeks</span>
+          <span><i class="sw" style="background:var(--axis)"></i>Earlier</span>
+        </div>
+        <div id="c-pace"></div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<details class="dis">
+  <summary>Last 14 days <span class="cnt">activities, sleep, RHR, HRV</span></summary>
+  <div class="body"><table id="t14"></table></div>
+</details>
+
+<details class="dis">
+  <summary>Journal <span class="cnt" id="jcnt"></span></summary>
+  <div class="body">
+    <div class="jrow">
+      <label>Shin L <input id="jl" type="number" min="0" max="10" value="1" style="width:58px"></label>
+      <label>R <input id="jr" type="number" min="0" max="10" value="1" style="width:58px"></label>
+      <input id="jn" placeholder="note — cadence, how it felt, next-morning shins…" style="flex:1;min-width:220px">
+      <button class="primary" id="jsave">Log</button>
+    </div>
+    <div class="jlist" id="jlist"></div>
+  </div>
+</details>
+
+<h2>Coach <span class="sub">· archived to <code>chats/</code>; durable notes go to the journal</span>
+  <button id="clearchat" style="padding:3px 9px;font-size:11px">Clear thread</button></h2>
+<div class="card">
+  <div id="log"></div>
+  <div class="composer">
+    <textarea id="q" rows="2" placeholder="Ask anything — it reads policy.md, context.md and the journal each turn. ⌘/Ctrl+Enter to send."></textarea>
+    <button class="primary" id="send">Send</button>
+  </div>
+  <div class="hint" id="hint"></div>
+</div>
+
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const tip = $('#tip');
+let D = null;
+
+const fmt = (v, d=1) => v==null ? '–' : (+v).toFixed(d);
+const paceStr = s => s==null ? '–' : `${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
+
+function showTip(e, text){
+  tip.textContent = text; tip.style.opacity = 1;
+  const r = tip.getBoundingClientRect();
+  tip.style.left = Math.min(e.clientX+12, innerWidth-r.width-8)+'px';
+  tip.style.top  = Math.max(e.clientY-r.height-10, 8)+'px';
+}
+const hideTip = () => tip.style.opacity = 0;
+
+// --- chart help --------------------------------------------------------------
+/* What the chart is, why the number is the one being watched, and how to read
+   it wrongly. Written to be read once by someone who has never met TRIMP or
+   ACWR — the thresholds all come from policy.md, so if one moves there it
+   should move here too. */
+const HELP = {
+  km: `<h5>Impact load per week</h5>
+    <p>Bars are <b>weighted kilometres</b> per calendar week — every km scaled by how
+    hard it lands: running 1.0, trail 1.15, treadmill 0.85, walking 0.25, and cycling,
+    swimming and strength 0.0. The dashed line is the <b>chronic average</b>, the same
+    figure over the last 28 days divided by four: a rolling picture of what your legs
+    are currently used to.</p>
+    <p>It gets its own chart because bone and tendon adapt on a much slower clock
+    than heart and lungs. Your aerobic system can happily absorb a jump in mileage
+    weeks before the tibia can, and that gap is where shin pain lives.</p>
+    <p>Read each bar against the line. Bar ÷ line is the <b>ACWR</b> (acute:chronic
+    workload ratio); above <b>1.30</b> you asked for more impact than the past month
+    prepared you for, and policy cuts running 20% the following week. Steady bars
+    creeping up beat a sawtooth, even at the same monthly total.</p>`,
+  trimp: `<h5>Aerobic load per week</h5>
+    <p><b>TRIMP</b> — training impulse — is one currency for cardiovascular work
+    across every activity. Banister's formula: minutes × how far your heart rate sat
+    into its reserve, weighted exponentially. So 40 min at HR 150 scores far more
+    than 40 min at HR 110, and a bike commute and a run become directly comparable.</p>
+    <p>This is the fitness channel — the thing worth protecting. Because cycling and
+    swimming score TRIMP but zero impact km, aerobic load can move off the legs
+    without disappearing.</p>
+    <p>You want this <b>flat or gently rising</b>, including in weeks where the km bars
+    drop. A collapse means fitness is leaking while the shins get looked after; a
+    spike means fatigue. Its ACWR ceiling is <b>1.50</b> — looser than the impact
+    ceiling, because the cardiovascular system recovers in days where bone takes
+    weeks.</p>`,
+  cad: `<h5>Cadence per run</h5>
+    <p>Steps per minute, both feet, averaged over a run. Dashed line is the
+    <b>168 target</b>; a run averaging under <b>162</b> is logged as a missed target.</p>
+    <p>At any given pace, more steps per minute means a shorter stride, a foot landing
+    closer under your hip, less braking on each contact and less vertical drop into
+    it. The same work gets spread over more, lighter impacts, and peak load through
+    the tibia falls — raising cadence around 5–10% is the form change with the most
+    evidence behind it, and it's trainable in weeks with nothing but a metronome.</p>
+    <p>The thing to look for is whether <b>slow</b> runs hold their turnover. A dip
+    means you slowed down by loafing the stride out rather than shortening it, which
+    is the exact loading pattern to avoid. Fast runs holding cadence while easy runs
+    sag is the classic shape.</p>`,
+  pace: `<h5>Pace against heart rate</h5>
+    <p>One dot per run: average heart rate across the bottom, average pace up the
+    side, faster higher. Dark dots are the last 8 weeks, grey ones earlier.</p>
+    <p>Pace on its own only tells you how hard you tried. Pace <i>at a fixed heart
+    rate</i> tells you how fit you are — it's aerobic efficiency, and it can't be
+    gamed by pushing, because running harder moves a dot to the right rather than up.
+    That's exactly why it's the headline metric here instead of a 5k time.</p>
+    <p>The benchmark is where the cloud crosses the <b>HR 140</b> line. Progress looks
+    like dots migrating <b>up and to the left</b> over months. Read the cloud, not any
+    one dot — heat, hills, sleep, caffeine and treadmill-vs-road each move a single
+    run's HR by several beats. And expect it to look worse for 2–3 weeks while
+    cadence rewires; that cost is known and priced in.</p>`,
+};
+
+const help = $('#help');
+let pinned = null;
+
+function placeHelp(btn){
+  const b = btn.getBoundingClientRect(), h = help.getBoundingClientRect();
+  let x = b.left - 8, y = b.bottom + 8;
+  if(x + h.width > innerWidth - 12) x = innerWidth - 12 - h.width;
+  if(y + h.height > innerHeight - 12) y = Math.max(12, b.top - 8 - h.height);
+  help.style.left = Math.max(12, x) + 'px';
+  help.style.top = y + 'px';
+}
+function showHelp(btn){
+  help.innerHTML = HELP[btn.dataset.help] || '';
+  help.classList.add('on');
+  placeHelp(btn);           // measure only once the content is in
+}
+function hideHelp(){
+  if(pinned) return;
+  help.classList.remove('on');
+}
+function unpin(){
+  if(!pinned) return;
+  pinned.classList.remove('pin');
+  pinned = null;
+  help.classList.remove('on','pin');
+}
+
+for(const btn of document.querySelectorAll('.info')){
+  btn.addEventListener('mouseenter', () => { if(!pinned) showHelp(btn); });
+  btn.addEventListener('mouseleave', hideHelp);
+  btn.addEventListener('focus', () => { if(!pinned) showHelp(btn); });
+  btn.addEventListener('blur', hideHelp);
+  // Click pins it open so the text can be read at leisure, or selected.
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const was = pinned === btn;
+    unpin();
+    if(was) return;
+    pinned = btn; btn.classList.add('pin');
+    showHelp(btn); help.classList.add('pin');
+  });
+}
+addEventListener('click', e => { if(!help.contains(e.target)) unpin(); });
+addEventListener('keydown', e => { if(e.key==='Escape'){ unpin(); hideHelp(); } });
+addEventListener('scroll', () => { unpin(); hideHelp(); }, true);
+
+function el(tag, attrs={}, kids=[]){
+  const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for(const k in attrs) n.setAttribute(k, attrs[k]);
+  kids.forEach(c => n.appendChild(c));
+  return n;
+}
+function frame(w, h, pad){
+  const svg = el('svg', {viewBox:`0 0 ${w} ${h}`, role:'img'});
+  return {svg, W:w, H:h, P:pad,
+          x0:pad.l, x1:w-pad.r, y0:h-pad.b, y1:pad.t,
+          iw:w-pad.l-pad.r, ih:h-pad.t-pad.b};
+}
+function yAxis(f, min, max, ticks, fmtT=(v)=>v){
+  const sc = v => f.y0 - (v-min)/(max-min||1)*f.ih;
+  for(const t of ticks){
+    const y = sc(t);
+    f.svg.appendChild(el('line',{x1:f.x0,x2:f.x1,y1:y,y2:y,
+      stroke:'var(--grid)','stroke-width':1}));
+    f.svg.appendChild(el('text',{x:f.x0-7,y:y+4,'text-anchor':'end',
+      fill:'var(--muted)','font-size':10},[document.createTextNode(fmtT(t))]));
+  }
+  f.svg.appendChild(el('line',{x1:f.x0,x2:f.x1,y1:f.y0,y2:f.y0,
+    stroke:'var(--axis)','stroke-width':1}));
+  return sc;
+}
+function refLine(f, y, label, color='var(--muted)'){
+  f.svg.appendChild(el('line',{x1:f.x0,x2:f.x1,y1:y,y2:y,stroke:color,
+    'stroke-width':1.5,'stroke-dasharray':'4 4'}));
+  // Surface-coloured backdrop so the label stays legible over marks.
+  const w = label.length*5.6 + 8;
+  f.svg.appendChild(el('rect',{x:f.x1-w, y:y-14, width:w, height:12, rx:3,
+    fill:'var(--surface)'}));
+  f.svg.appendChild(el('text',{x:f.x1-4,y:y-5,'text-anchor':'end',fill:color,
+    'font-size':10,'font-weight':600},[document.createTextNode(label)]));
+}
+function niceTicks(min, max, n=4){
+  const span = (max-min)||1, raw = span/n, mag = 10**Math.floor(Math.log10(raw));
+  const step = [1,2,2.5,5,10].find(s => s*mag >= raw)*mag;
+  const out = []; for(let v=Math.ceil(min/step)*step; v<=max+1e-9; v+=step) out.push(+v.toFixed(6));
+  return out;
+}
+
+// --- weekly bars -------------------------------------------------------------
+function barChart(mount, data, key, unit, refVal, refLabel){
+  const w=520,h=190, f=frame(w,h,{t:14,r:12,b:26,l:38});
+  const vals = data.map(d=>d[key]);
+  const max = Math.max(...vals, refVal||0)*1.15 || 1;
+  const sc = yAxis(f, 0, max, niceTicks(0,max,4));
+  const bw = f.iw/data.length, gap = Math.min(6, bw*0.22);
+  data.forEach((d,i)=>{
+    const x = f.x0 + i*bw + gap/2, bwid = Math.max(1, bw-gap);
+    const y = sc(d[key]||0), hgt = Math.max(0, f.y0-y);
+    const r = el('rect',{x, y, width:bwid, height:hgt, rx:Math.min(4,bwid/2),
+      fill:'var(--ink2)'});
+    r.addEventListener('mousemove', e =>
+      showTip(e, `${d.week}\n${fmt(d[key], key==='trimp'?0:1)} ${unit}${
+        key==='impact_km' && d.run_km!=null ? `\n${fmt(d.run_km,1)} km run` : ''}`));
+    r.addEventListener('mouseleave', hideTip);
+    f.svg.appendChild(r);
+    if(i % Math.ceil(data.length/6) === 0)
+      f.svg.appendChild(el('text',{x:x+bwid/2, y:f.y0+15,'text-anchor':'middle',
+        fill:'var(--muted)','font-size':10},
+        [document.createTextNode(d.start.slice(5))]));
+  });
+  if(refVal) refLine(f, sc(refVal), refLabel);
+  mount.replaceChildren(f.svg);
+}
+
+// --- cadence line ------------------------------------------------------------
+function cadenceChart(mount, runs){
+  const pts = runs.filter(r=>r.cadence);
+  const w=520,h=190, f=frame(w,h,{t:14,r:12,b:26,l:38});
+  const vals = pts.map(p=>p.cadence);
+  const min = Math.min(...vals,150)-8, max = Math.max(...vals,172)+6;
+  const sc = yAxis(f, min, max, niceTicks(min,max,4), v=>v.toFixed(0));
+  const X = i => f.x0 + (pts.length<2?0.5:i/(pts.length-1))*f.iw;
+  f.svg.appendChild(el('path',{d:pts.map((p,i)=>`${i?'L':'M'}${X(i)} ${sc(p.cadence)}`).join(' '),
+    fill:'none', stroke:'var(--ink2)','stroke-width':2,
+    'stroke-linejoin':'round','stroke-linecap':'round'}));
+  pts.forEach((p,i)=>{
+    const c = el('circle',{cx:X(i), cy:sc(p.cadence), r:4, fill:'var(--ink2)',
+      stroke:'var(--surface)','stroke-width':2});
+    c.addEventListener('mousemove', e => showTip(e,
+      `${p.date}\n${p.cadence.toFixed(0)} spm · ${fmt(p.km,2)} km\n${paceStr(p.pace)}/km · HR ${fmt(p.hr,0)}`));
+    c.addEventListener('mouseleave', hideTip);
+    f.svg.appendChild(c);
+  });
+  refLine(f, sc(168), '168 target', 'var(--muted)');
+  [0, pts.length-1].forEach(i => pts[i] && f.svg.appendChild(
+    el('text',{x:X(i), y:f.y0+15,'text-anchor':i?'end':'start',
+      fill:'var(--muted)','font-size':10},
+      [document.createTextNode(pts[i].date.slice(2))])));
+  mount.replaceChildren(f.svg);
+}
+
+// --- pace vs HR scatter ------------------------------------------------------
+function paceChart(mount, runs){
+  const pts = runs.filter(r=>r.pace && r.hr && r.cadence>145);
+  if(!pts.length) return;
+  const cutoff = new Date(Date.now()-56*864e5).toISOString().slice(0,10);
+  const w=520,h=200, f=frame(w,h,{t:14,r:14,b:30,l:46});
+  const hrs = pts.map(p=>p.hr), pcs = pts.map(p=>p.pace);
+  const hMin=Math.min(...hrs)-5, hMax=Math.max(...hrs)+5;
+  const pMin=Math.min(...pcs)-15, pMax=Math.max(...pcs)+15;
+  // pace inverted: faster (smaller) is higher on the chart
+  const sy = v => f.y1 + (v-pMin)/(pMax-pMin||1)*f.ih;
+  const sx = v => f.x0 + (v-hMin)/(hMax-hMin||1)*f.iw;
+  niceTicks(pMin,pMax,4).forEach(t=>{
+    const y=sy(t);
+    f.svg.appendChild(el('line',{x1:f.x0,x2:f.x1,y1:y,y2:y,stroke:'var(--grid)','stroke-width':1}));
+    f.svg.appendChild(el('text',{x:f.x0-7,y:y+4,'text-anchor':'end',
+      fill:'var(--muted)','font-size':10},[document.createTextNode(paceStr(t))]));
+  });
+  f.svg.appendChild(el('line',{x1:f.x0,x2:f.x1,y1:f.y0,y2:f.y0,stroke:'var(--axis)','stroke-width':1}));
+  niceTicks(hMin,hMax,4).forEach(t=>
+    f.svg.appendChild(el('text',{x:sx(t),y:f.y0+15,'text-anchor':'middle',
+      fill:'var(--muted)','font-size':10},[document.createTextNode(t.toFixed(0))])));
+  f.svg.appendChild(el('text',{x:(f.x0+f.x1)/2,y:f.y0+28,'text-anchor':'middle',
+    fill:'var(--muted)','font-size':10},[document.createTextNode('avg HR (bpm)')]));
+  if(hMin<140 && hMax>140){
+    const x=sx(140);
+    f.svg.appendChild(el('line',{x1:x,x2:x,y1:f.y1,y2:f.y0,stroke:'var(--muted)',
+      'stroke-width':1.5,'stroke-dasharray':'4 4'}));
+    f.svg.appendChild(el('text',{x:x+4,y:f.y1+10,fill:'var(--muted)','font-size':10,
+      'font-weight':600},[document.createTextNode('HR 140')]));
+  }
+  pts.forEach(p=>{
+    const recent = p.date >= cutoff;
+    const c = el('circle',{cx:sx(p.hr), cy:sy(p.pace), r:5,
+      fill:recent?'var(--ink)':'var(--axis)', stroke:'var(--surface)','stroke-width':2,
+      'fill-opacity':recent?1:.65});
+    c.addEventListener('mousemove', e => showTip(e,
+      `${p.date}\n${paceStr(p.pace)}/km at HR ${p.hr.toFixed(0)}\n${fmt(p.km,2)} km · ${p.cadence.toFixed(0)} spm`));
+    c.addEventListener('mouseleave', hideTip);
+    f.svg.appendChild(c);
+  });
+  mount.replaceChildren(f.svg);
+}
+
+// --- render ------------------------------------------------------------------
+/* State is carried by a small dot, never by coloured type — a page of coloured
+   numbers reads as decoration and stops signalling anything. */
+const LVL = {2:'var(--crit)', 1:'var(--warn)', 0:'var(--good)'};
+const dot = lvl => lvl ? `<i class="dot" style="background:${LVL[lvl]}"></i>` : '';
+
+function tile(label, val, note, lvl){
+  return `<div class="card tile"><div class="label">${dot(lvl)}${label}</div>
+    <div class="val">${val}</div>
+    <div class="note">${note||''}</div></div>`;
+}
+const KIND = {run:'RUN', cross:'CROSS', strength:'STRENGTH', rest:'REST'};
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function dayName(iso){
+  const [y,m,d] = iso.split('-').map(Number);
+  return DOW[new Date(Date.UTC(y,m-1,d)).getUTCDay()];
+}
+
+/* One pass over the numbers produces every judgement on the page: the verdict,
+   the reasons under it and the colour of each chip. The verdict is only ever a
+   summary of `items` — it has no thresholds of its own to drift out of step. */
+function assess(){
+  const s = D.stats;
+  const hrvLow = s.hrv_night!=null && s.hrv_lo!=null && s.hrv_night < s.hrv_lo;
+  const lastCad = D.runs.filter(r=>r.cadence).at(-1);
+  const items = [];
+
+  if(s.impact_acwr>1.3) items.push({lvl:2,
+    head:'Impact load is over the ceiling',
+    why:`ACWR ${fmt(s.impact_acwr,2)} against a 1.30 limit — ${fmt(s.impact_acute,1)} km this week
+         versus a ${fmt(s.impact_chronic,1)} km chronic average. Policy §4: cut running 20% next week.`});
+  if(s.aerobic_acwr>1.5) items.push({lvl:2,
+    head:'Aerobic load is over the ceiling',
+    why:`ACWR ${fmt(s.aerobic_acwr,2)} against a 1.50 limit — ${fmt(s.aerobic_acute,0)} TRIMP
+         versus a ${fmt(s.aerobic_chronic,0)} chronic average.`});
+  if(hrvLow) items.push({lvl:1,
+    head:'Overnight HRV below baseline',
+    why:`${fmt(s.hrv_night,0)} ms against a ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms baseline.
+         One signal only — a veto needs RHR ≥ 56 as well (RHR is ${fmt(s.rhr,0)}).`});
+  if(lastCad && lastCad.cadence<162) items.push({lvl:1,
+    head:'Cadence under the floor',
+    why:`Last run ${lastCad.cadence.toFixed(0)} spm, below the 162 floor and well under the
+         168 target. Shuffling raises bone load at the same pace.`});
+
+  if(!items.length) items.push({lvl:0, head:'Nothing is outside its limit',
+    why:'Every channel is inside its ceiling and readiness is normal. Run the plan as written.'});
+
+  const lvl = items.reduce((m,i)=>Math.max(m,i.lvl), 0);
+  const verdict = lvl===2 ? 'Back off' : lvl===1 ? 'Proceed, but watch it' : 'All clear';
+  return {items, lvl, verdict, hrvLow, lastCad};
+}
+
+function chip(k, v, lvl){
+  return `<span class="chip">${dot(lvl)}<span class="k">${k}</span><b>${v}</b></span>`;
+}
+
+function renderStatus(a){
+  const s = D.stats;
+  $('#status').innerHTML = `
+    <div class="status">
+      <div class="verdict"><i class="dot" style="background:${LVL[a.lvl]}"></i>${a.verdict}</div>
+      <div class="reasons">${a.items.map(i =>
+        `<div class="flag"><i class="dot" style="background:${LVL[i.lvl]}"></i>
+           <span><b>${i.head}.</b> <span class="why">${i.why}</span></span></div>`).join('')}</div>
+      <div class="chips">
+        ${chip('Impact ACWR', fmt(s.impact_acwr,2), s.impact_acwr>1.3?2:s.impact_acwr>1.15?1:0)}
+        ${chip('Aerobic ACWR', fmt(s.aerobic_acwr,2), s.aerobic_acwr>1.5?2:0)}
+        ${chip('Run, 7d', fmt(s.run_km_7d,1)+' km', s.run_km_7d>9?1:0)}
+        ${chip('HRV', s.hrv_night==null?'–':fmt(s.hrv_night,0)+' ms', a.hrvLow?1:0)}
+        ${chip('Sleep', s.sleep_score==null?'–':fmt(s.sleep_score,0), s.sleep_score<70?1:0)}
+        ${a.lastCad ? chip('Cadence', a.lastCad.cadence.toFixed(0)+' spm',
+                           a.lastCad.cadence<162?1:0) : ''}
+      </div>
+    </div>`;
+
+  $('#tiles').innerHTML =
+    tile('Impact ACWR', fmt(s.impact_acwr,2), `${fmt(s.impact_acute,1)} vs ${fmt(s.impact_chronic,1)} km · ceiling 1.30`,
+         s.impact_acwr>1.3?2:s.impact_acwr>1.15?1:0) +
+    tile('Aerobic ACWR', fmt(s.aerobic_acwr,2), `${fmt(s.aerobic_acute,0)} vs ${fmt(s.aerobic_chronic,0)} · ceiling 1.50`,
+         s.aerobic_acwr>1.5?2:0) +
+    tile('Running, 7 days', fmt(s.run_km_7d,1)+' km', 'Phase A cap: 9 km', s.run_km_7d>9?1:0) +
+    tile('Overnight HRV', s.hrv_night==null?'–':fmt(s.hrv_night,0)+' ms',
+         `baseline ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms`, a.hrvLow?1:0) +
+    tile('Last sleep', s.sleep_score==null?'–':fmt(s.sleep_score,0),
+         `RHR ${fmt(s.rhr,0)} · ${s.sleep_date||''}`, s.sleep_score<70?1:0);
+}
+
+/* Which day the card above the strip is showing. null means "today" (or the
+   next session if today isn't in the plan) — the state you land on. */
+let picked = null;
+
+function renderWeek(){
+  const wk = D.week || [];
+  $('#planname').textContent = D.plan_name ? `· ${D.plan_name.replace('.md','')}` : '';
+  if(!wk.length){
+    $('#todaycard').innerHTML = '<div class="card">No plan found. Add a <code>```week</code> block to the newest file in <code>plans/</code>.</div>';
+    $('#strip').innerHTML=''; $('#weekcnt').textContent=''; return;
+  }
+  const t = D.today;
+  const todayRow = wk.find(d => d.date === t);
+  const fallback = todayRow || wk.find(d => d.date > t) || wk[wk.length-1];
+  const sel = (picked && wk.find(d => d.date === picked)) || fallback;
+  const k = KIND[sel.kind] || KIND.rest;
+  const when = sel.date === t ? 'Today'
+    : sel === fallback ? 'Next up — ' + dayName(sel.date) + ' ' + sel.date.slice(8)
+    : dayName(sel.date) + ' ' + sel.date.slice(8);
+  const logged = sel.logged
+    ? `<div style="color:var(--muted);font-size:12px;margin-top:3px">${sel.logged}${
+        sel.run_km ? ` · ${sel.run_km} km` : ''}</div>`
+    : '';
+  $('#todaycard').innerHTML = `
+    <div class="today">
+      <div style="flex:1">
+        <div class="when">${when} · ${k}</div>
+        <div class="what">${sel.title}</div>
+        <div class="how">${sel.detail||''}</div>
+      </div>
+      <div style="text-align:right;white-space:nowrap">
+        ${sel.done && sel.kind!=='rest'
+          ? '<span class="chk ok">✓ logged</span>'
+          : '<span style="color:var(--muted);font-size:12px">not logged yet</span>'}
+        ${logged}
+        ${sel.date !== fallback.date
+          ? '<div><button id="backtoday" style="padding:3px 9px;font-size:11px;margin-top:8px">Back to today</button></div>'
+          : ''}
+      </div>
+    </div>`;
+  const back = $('#backtoday');
+  if(back) back.onclick = () => { picked = null; renderWeek(); };
+
+  const sessions = wk.filter(d => d.kind !== 'rest');
+  const doneN = sessions.filter(d => d.done).length;
+  const left = wk.filter(d => d.date > t && d.kind !== 'rest').length;
+  $('#weekcnt').textContent =
+    `${doneN}/${sessions.length} sessions logged · ${left} still ahead`;
+
+  $('#strip').innerHTML = wk.map(d=>{
+    const past = d.date < t, isToday = d.date === t;
+    const mark = d.kind==='rest' ? ''
+      : d.done ? '<span class="chk ok">✓</span>'
+      : past ? '<span class="chk miss">missed</span>' : '';
+    return `<button type="button" class="day ${isToday?'is-today':''} ${
+        d.date===sel.date?'is-sel':''} ${past&&!isToday?'past':''}"
+        data-date="${d.date}" aria-pressed="${d.date===sel.date}">
+      <div class="dn"><span>${dayName(d.date)} ${d.date.slice(8)}</span>${mark}</div>
+      <div class="tt">${d.title}</div>
+    </button>`;
+  }).join('');
+}
+
+function render(){
+  $('#gen').textContent = `data through ${D.last14.at(-1)?.date ?? '?'} · built ${D.generated.replace('T',' ')}`;
+
+  const a = assess();
+  renderStatus(a);
+  renderWeek();
+
+  barChart($('#c-km'), D.weekly, 'impact_km', 'impact km', D.stats.impact_chronic, 'chronic avg');
+  barChart($('#c-trimp'), D.weekly, 'trimp', 'TRIMP', D.stats.aerobic_chronic, 'chronic avg');
+  cadenceChart($('#c-cad'), D.runs);
+  paceChart($('#c-pace'), D.runs);
+
+  $('#t14').innerHTML =
+    '<tr><th>Date</th><th>Day</th><th>Activities</th><th>Run km</th><th>TRIMP</th><th>Sleep</th><th>RHR</th><th>HRV</th></tr>' +
+    D.last14.slice().reverse().map(r=>`<tr><td>${r.date}</td><td>${r.dow||''}</td>
+      <td>${r.activities||'–'}</td><td>${r.run_km?fmt(r.run_km,2):'–'}</td>
+      <td>${r.trimp?fmt(r.trimp,0):'–'}</td><td>${r.sleep_score?fmt(r.sleep_score,0):'–'}</td>
+      <td>${r.rhr?fmt(r.rhr,0):'–'}</td><td>${r.hrv_night?fmt(r.hrv_night,0):'–'}</td></tr>`).join('');
+
+  $('#jcnt').textContent = `${D.journal.length} entr${D.journal.length===1?'y':'ies'} · last ${
+    (D.journal.at(-1)||'').slice(0,10) || '–'}`;
+  $('#jlist').innerHTML = D.journal.slice().reverse()
+    .map(l=>`<div>${l.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`).join('');
+  $('#hint').innerHTML = D.has_key ? '' :
+    '<span class="err">Chat disabled — no API key found. Get one at console.anthropic.com, then run '
+    + '<code>./.venv/bin/python serve.py --set-key</code> once and restart with <code>./run.sh</code>.</span>';
+}
+
+async function load(){
+  D = await (await fetch('/api/data')).json();
+  render();
+}
+
+$('#rebuild').onclick = async e => {
+  const b=e.target; b.disabled=true; b.textContent='Rebuilding…';
+  const r = await (await fetch('/api/build',{method:'POST',body:'{}'})).json();
+  await load();
+  b.disabled=false; b.textContent = r.ok ? 'Rebuild from CSVs' : 'Rebuild failed';
+};
+
+$('#jsave').onclick = async () => {
+  const d = new Date().toISOString().slice(0,10);
+  const line = `${d} | shin L${$('#jl').value}/R${$('#jr').value} | note: ${$('#jn').value||'-'}`;
+  await fetch('/api/journal',{method:'POST',body:JSON.stringify({line})});
+  $('#jn').value=''; await load();
+};
+
+// Clicking a day swaps it into the card above; clicking it again goes back to
+// today. Delegated, because the strip is re-rendered on every load.
+$('#strip').addEventListener('click', e => {
+  const b = e.target.closest('.day'); if(!b) return;
+  picked = (picked === b.dataset.date) ? null : b.dataset.date;
+  renderWeek();
+});
+
+// Disclosure state survives a reload — whichever sections you keep open are the
+// ones you actually use, and a rebuild shouldn't collapse them again.
+for(const d of document.querySelectorAll('details.dis')){
+  const key = 'fa.open.' + (d.id || d.querySelector('summary').textContent.trim().slice(0,24));
+  const saved = localStorage.getItem(key);
+  if(saved !== null) d.open = saved === '1';
+  d.addEventListener('toggle', () => localStorage.setItem(key, d.open ? '1' : '0'));
+}
+
+// --- chat --------------------------------------------------------------------
+// Every exchange is archived server-side to chats/YYYY-MM.md; durable facts get
+// promoted into journal.md. localStorage only keeps the visible thread so a
+// reload doesn't wipe the screen.
+const LS = 'fa.chat';
+let history = [];
+try { history = JSON.parse(localStorage.getItem(LS) || '[]'); } catch { history = []; }
+const saveHistory = () => {
+  try { localStorage.setItem(LS, JSON.stringify(history.slice(-40))); } catch {}
+};
+function md(t){
+  // The [[journal: …]] marker is machinery, not content — hide it, including
+  // the partial form that appears mid-stream.
+  return t.replace(/\[\[journal:[\s\S]*?(\]\]|$)/g,'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/```([\s\S]*?)```/g,(m,c)=>`<pre class="bot"><code>${c}</code></pre>`)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/^#{1,6}\s*(.+)$/gm,'<h4>$1</h4>')
+    .replace(/^[-*]\s+(.+)$/gm,'• $1');
+}
+function bubble(cls, html){
+  const d=document.createElement('div'); d.className='msg '+cls; d.innerHTML=html;
+  $('#log').appendChild(d); $('#log').scrollTop=1e9; return d;
+}
+async function send(){
+  const q = $('#q').value.trim(); if(!q) return;
+  $('#q').value=''; $('#send').disabled=true;
+  bubble('me', md(q));
+  history.push({role:'user', content:q}); saveHistory();
+  const out = bubble('bot','<span style="color:var(--muted)">thinking…</span>');
+  let acc='';
+  try{
+    const res = await fetch('/api/chat',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({messages:history})});
+    if(res.headers.get('content-type')?.includes('application/json')){
+      const j = await res.json();
+      out.innerHTML = `<span class="err">${md(j.error||'error')}</span>`;
+      $('#send').disabled=false; return;
+    }
+    const rd = res.body.getReader(), dec = new TextDecoder();
+    let buf='';
+    for(;;){
+      const {value,done} = await rd.read(); if(done) break;
+      buf += dec.decode(value,{stream:true});
+      const parts = buf.split('\n\n'); buf = parts.pop();
+      for(const p of parts){
+        if(!p.startsWith('data: ')) continue;
+        const e = JSON.parse(p.slice(6));
+        if(e.t){ acc+=e.t; out.innerHTML = md(acc); $('#log').scrollTop=1e9; }
+        if(e.error) out.innerHTML = `<span class="err">${e.error}</span>`;
+        if(e.done && e.journal){
+          out.insertAdjacentHTML('beforeend',
+            `<div style="margin-top:8px;font-size:11.5px;color:var(--ink2)">
+               ✓ saved to journal — <code>${e.journal.replace(/</g,'&lt;')}</code></div>`);
+          load();   // refresh the journal list below
+        }
+      }
+    }
+    if(acc){ history.push({role:'assistant', content:acc}); saveHistory(); }
+  }catch(err){
+    out.innerHTML = `<span class="err">${err}</span>`;
+  }
+  $('#send').disabled=false; $('#q').focus();
+}
+
+// Replay the saved thread on load.
+for(const m of history) bubble(m.role==='user'?'me':'bot', md(m.content));
+$('#clearchat').onclick = () => {
+  history = []; saveHistory(); $('#log').replaceChildren();
+};
+$('#send').onclick = send;
+$('#q').addEventListener('keydown', e => {
+  if(e.key==='Enter' && (e.metaKey||e.ctrlKey)){ e.preventDefault(); send(); }
+});
+
+load();
+</script>
+</body>
+</html>
