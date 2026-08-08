@@ -50,9 +50,12 @@ button:disabled{opacity:.5;cursor:default}
 /* Colour appears only as small state dots — never as coloured type. */
 .status{padding:17px 19px;border-radius:12px;background:var(--surface);
   border:1px solid var(--border)}
-.status .verdict{display:flex;align-items:center;gap:9px;font-size:20px;
-  font-weight:600;line-height:1.25;letter-spacing:-.015em}
+.status .verdict{display:flex;align-items:center;flex-wrap:wrap;gap:9px;
+  font-size:20px;font-weight:600;line-height:1.25;letter-spacing:-.015em}
 .status .verdict .dot{width:9px;height:9px;margin:0}
+/* What the verdict could not see, kept subordinate to the verdict itself. */
+.status .verdict .gap{font-size:12.5px;font-weight:400;color:var(--muted);
+  letter-spacing:0}
 .status .reasons{margin-top:11px;padding-top:3px;border-top:1px solid var(--border)}
 .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px;padding-top:13px;
   border-top:1px solid var(--border)}
@@ -139,6 +142,8 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .flag b{font-weight:650}
 .flag .why{color:var(--ink2)}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:6px}
+/* No reading yet — an outline, so it holds the slot without claiming a state. */
+.dot.none{background:none;border:1px solid var(--axis)}
 table{border-collapse:collapse;width:100%;font-size:12.5px;
   font-variant-numeric:tabular-nums}
 th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;
@@ -210,40 +215,8 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 <h2>Detail</h2>
 
 <details class="dis">
-  <summary>Trends <span class="cnt">volume, aerobic load, cadence, pace vs HR</span></summary>
-  <div class="body">
-    <div class="charts">
-      <div class="card">
-        <div class="ctitle">Impact load per week (weighted km)
-          <button class="info" data-help="km" aria-label="What is this chart?">?</button></div>
-        <div class="csub">Running 1.0 · treadmill 0.85 · walking 0.25 · bike and swim 0.
-          Dashed line = 28-day chronic average.</div>
-        <div id="c-km"></div>
-      </div>
-      <div class="card">
-        <div class="ctitle">Aerobic load per week (TRIMP)
-          <button class="info" data-help="trimp" aria-label="What is this chart?">?</button></div>
-        <div class="csub">Held steady by cycling and swimming while running is capped.</div>
-        <div id="c-trimp"></div>
-      </div>
-      <div class="card">
-        <div class="ctitle">Cadence per run
-          <button class="info" data-help="cad" aria-label="What is this chart?">?</button></div>
-        <div class="csub">Dashed line = 168 spm target. Dips are shuffling on slow runs.</div>
-        <div id="c-cad"></div>
-      </div>
-      <div class="card">
-        <div class="ctitle">Pace against heart rate
-          <button class="info" data-help="pace" aria-label="What is this chart?">?</button></div>
-        <div class="csub">Faster is higher. The benchmark is pace at HR 140 — down and left is better.</div>
-        <div class="legend">
-          <span><i class="sw" style="background:var(--ink)"></i>Last 8 weeks</span>
-          <span><i class="sw" style="background:var(--axis)"></i>Earlier</span>
-        </div>
-        <div id="c-pace"></div>
-      </div>
-    </div>
-  </div>
+  <summary>Trends <span class="cnt" id="trendcnt"></span></summary>
+  <div class="body"><div class="charts" id="charts"></div></div>
 </details>
 
 <details class="dis">
@@ -254,12 +227,7 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 <details class="dis">
   <summary>Journal <span class="cnt" id="jcnt"></span></summary>
   <div class="body">
-    <div class="jrow">
-      <label>Shin L <input id="jl" type="number" min="0" max="10" value="1" style="width:58px"></label>
-      <label>R <input id="jr" type="number" min="0" max="10" value="1" style="width:58px"></label>
-      <input id="jn" placeholder="note — cadence, how it felt, next-morning shins…" style="flex:1;min-width:220px">
-      <button class="primary" id="jsave">Log</button>
-    </div>
+    <div class="jrow" id="jrow"></div>
     <div class="jlist" id="jlist"></div>
   </div>
 </details>
@@ -295,60 +263,52 @@ const hideTip = () => tip.style.opacity = 0;
 // --- chart help --------------------------------------------------------------
 /* What the chart is, why the number is the one being watched, and how to read
    it wrongly. Written to be read once by someone who has never met TRIMP or
-   ACWR — the thresholds all come from policy.md, so if one moves there it
-   should move here too. */
-const HELP = {
-  km: `<h5>Impact load per week</h5>
-    <p>Bars are <b>weighted kilometres</b> per calendar week — every km scaled by how
-    hard it lands: running 1.0, trail 1.15, treadmill 0.85, walking 0.25, and cycling,
-    swimming and strength 0.0. The dashed line is the <b>chronic average</b>, the same
-    figure over the last 28 days divided by four: a rolling picture of what your legs
-    are currently used to.</p>
-    <p>It gets its own chart because bone and tendon adapt on a much slower clock
-    than heart and lungs. Your aerobic system can happily absorb a jump in mileage
-    weeks before the tibia can, and that gap is where shin pain lives.</p>
-    <p>Read each bar against the line. Bar ÷ line is the <b>ACWR</b> (acute:chronic
-    workload ratio); above <b>1.30</b> you asked for more impact than the past month
-    prepared you for, and policy cuts running 20% the following week. Steady bars
-    creeping up beat a sawtooth, even at the same monthly total.</p>`,
-  trimp: `<h5>Aerobic load per week</h5>
-    <p><b>TRIMP</b> — training impulse — is one currency for cardiovascular work
-    across every activity. Banister's formula: minutes × how far your heart rate sat
-    into its reserve, weighted exponentially. So 40 min at HR 150 scores far more
-    than 40 min at HR 110, and a bike commute and a run become directly comparable.</p>
-    <p>This is the fitness channel — the thing worth protecting. Because cycling and
-    swimming score TRIMP but zero impact km, aerobic load can move off the legs
-    without disappearing.</p>
-    <p>You want this <b>flat or gently rising</b>, including in weeks where the km bars
-    drop. A collapse means fitness is leaking while the shins get looked after; a
-    spike means fatigue. Its ACWR ceiling is <b>1.50</b> — looser than the impact
-    ceiling, because the cardiovascular system recovers in days where bone takes
-    weeks.</p>`,
-  cad: `<h5>Cadence per run</h5>
-    <p>Steps per minute, both feet, averaged over a run. Dashed line is the
-    <b>168 target</b>; a run averaging under <b>162</b> is logged as a missed target.</p>
-    <p>At any given pace, more steps per minute means a shorter stride, a foot landing
-    closer under your hip, less braking on each contact and less vertical drop into
-    it. The same work gets spread over more, lighter impacts, and peak load through
-    the tibia falls — raising cadence around 5–10% is the form change with the most
-    evidence behind it, and it's trainable in weeks with nothing but a metronome.</p>
-    <p>The thing to look for is whether <b>slow</b> runs hold their turnover. A dip
-    means you slowed down by loafing the stride out rather than shortening it, which
-    is the exact loading pattern to avoid. Fast runs holding cadence while easy runs
-    sag is the classic shape.</p>`,
-  pace: `<h5>Pace against heart rate</h5>
-    <p>One dot per run: average heart rate across the bottom, average pace up the
-    side, faster higher. Dark dots are the last 8 weeks, grey ones earlier.</p>
-    <p>Pace on its own only tells you how hard you tried. Pace <i>at a fixed heart
-    rate</i> tells you how fit you are — it's aerobic efficiency, and it can't be
-    gamed by pushing, because running harder moves a dot to the right rather than up.
-    That's exactly why it's the headline metric here instead of a 5k time.</p>
-    <p>The benchmark is where the cloud crosses the <b>HR 140</b> line. Progress looks
-    like dots migrating <b>up and to the left</b> over months. Read the cloud, not any
-    one dot — heat, hills, sleep, caffeine and treadmill-vs-road each move a single
-    run's HR by several beats. And expect it to look worse for 2–3 weeks while
-    cadence rewires; that cost is known and priced in.</p>`,
-};
+   ACWR. The mechanics are generic; the sport-specific "why this matters to me"
+   paragraph is the `rationale` string in config.json, so there is one place to
+   change it rather than a prose copy that drifts from the numbers. */
+let HELP = {};
+
+function buildHelp(c){
+  const weights = Object.entries(c.mechanical.weights)
+    .map(([k,v]) => `${k.toLowerCase()} ${v}`).join(' · ');
+  return {
+    mech: `<h5>${c.mechanical.label} load per week</h5>
+      <p>Bars are <b>${c.mechanical.unit}</b> per calendar week — every km scaled by
+      how much it costs the tissue you're protecting${weights ? `: ${weights}, and
+      everything else 0.0` : ''}. The dashed line is the <b>chronic average</b>, the
+      same figure over the last 28 days divided by four: a rolling picture of what
+      you are currently used to.</p>
+      ${c.mechanical.rationale}
+      <p>Read each bar against the line. Bar ÷ line is the <b>ACWR</b> (acute:chronic
+      workload ratio); above <b>${c.mechanical.acwr_ceiling}</b> you asked for more
+      than the past month prepared you for.</p>`,
+    aerobic: `<h5>${c.aerobic.label} load per week</h5>
+      <p><b>TRIMP</b> — training impulse — is one currency for cardiovascular work
+      across every activity. Banister's formula: minutes × how far your heart rate sat
+      into its reserve, weighted exponentially. So 40 min at HR 150 scores far more
+      than 40 min at HR 110, and a bike ride and a run become directly comparable.</p>
+      ${c.aerobic.rationale}
+      <p>Its ACWR ceiling is <b>${c.aerobic.acwr_ceiling}</b>.</p>`,
+    form: `<h5>${c.form_metric.label} per session</h5>
+      <p>Averaged over each session. ${c.form_metric.target
+        ? `Dashed line is the <b>${c.form_metric.target} target</b>` : ''}${
+        c.form_metric.floor ? `; a session under <b>${c.form_metric.floor}
+        ${c.form_metric.unit}</b> is logged as a missed target` : ''}.</p>
+      ${c.form_metric.rationale}`,
+    pace: `<h5>Pace against heart rate</h5>
+      <p>One dot per session: average heart rate across the bottom, average pace up
+      the side, faster higher. Dark dots are the last 8 weeks, grey ones earlier.</p>
+      <p>Pace on its own only tells you how hard you tried. Pace <i>at a fixed heart
+      rate</i> tells you how fit you are — it's aerobic efficiency, and it can't be
+      gamed by pushing, because going harder moves a dot to the right rather than
+      up.</p>
+      <p>The benchmark is where the cloud crosses the <b>HR ${c.benchmark.hr}</b>
+      line. Progress looks like dots migrating <b>up and to the left</b> over months.
+      Read the cloud, not any one dot — heat, hills, sleep, caffeine and
+      indoor-vs-outdoor each move a single session's HR by several beats.</p>
+      ${c.benchmark.rationale}`,
+  };
+}
 
 const help = $('#help');
 let pinned = null;
@@ -377,20 +337,23 @@ function unpin(){
   help.classList.remove('on','pin');
 }
 
-for(const btn of document.querySelectorAll('.info')){
-  btn.addEventListener('mouseenter', () => { if(!pinned) showHelp(btn); });
-  btn.addEventListener('mouseleave', hideHelp);
-  btn.addEventListener('focus', () => { if(!pinned) showHelp(btn); });
-  btn.addEventListener('blur', hideHelp);
-  // Click pins it open so the text can be read at leisure, or selected.
-  btn.addEventListener('click', e => {
-    e.stopPropagation();
-    const was = pinned === btn;
-    unpin();
-    if(was) return;
-    pinned = btn; btn.classList.add('pin');
-    showHelp(btn); help.classList.add('pin');
-  });
+// Charts are built from config, so the buttons don't exist until render time.
+function wireHelp(){
+  for(const btn of document.querySelectorAll('.info')){
+    btn.addEventListener('mouseenter', () => { if(!pinned) showHelp(btn); });
+    btn.addEventListener('mouseleave', hideHelp);
+    btn.addEventListener('focus', () => { if(!pinned) showHelp(btn); });
+    btn.addEventListener('blur', hideHelp);
+    // Click pins it open so the text can be read at leisure, or selected.
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const was = pinned === btn;
+      unpin();
+      if(was) return;
+      pinned = btn; btn.classList.add('pin');
+      showHelp(btn); help.classList.add('pin');
+    });
+  }
 }
 addEventListener('click', e => { if(!help.contains(e.target)) unpin(); });
 addEventListener('keydown', e => { if(e.key==='Escape'){ unpin(); hideHelp(); } });
@@ -452,7 +415,8 @@ function barChart(mount, data, key, unit, refVal, refLabel){
       fill:'var(--ink2)'});
     r.addEventListener('mousemove', e =>
       showTip(e, `${d.week}\n${fmt(d[key], key==='trimp'?0:1)} ${unit}${
-        key==='impact_km' && d.run_km!=null ? `\n${fmt(d.run_km,1)} km run` : ''}`));
+        key==='mech_km' && d.primary_km!=null
+          ? `\n${fmt(d.primary_km,1)} ${C.primary.unit} ${C.primary.label.toLowerCase()}` : ''}`));
     r.addEventListener('mouseleave', hideTip);
     f.svg.appendChild(r);
     if(i % Math.ceil(data.length/6) === 0)
@@ -464,26 +428,30 @@ function barChart(mount, data, key, unit, refVal, refLabel){
   mount.replaceChildren(f.svg);
 }
 
-// --- cadence line ------------------------------------------------------------
-function cadenceChart(mount, runs){
-  const pts = runs.filter(r=>r.cadence);
+// --- form metric line --------------------------------------------------------
+function formChart(mount, sessions){
+  const m = C.form_metric;
+  const pts = sessions.filter(r=>r.form);
+  if(!pts.length) return;
   const w=520,h=190, f=frame(w,h,{t:14,r:12,b:26,l:38});
-  const vals = pts.map(p=>p.cadence);
-  const min = Math.min(...vals,150)-8, max = Math.max(...vals,172)+6;
+  const vals = pts.map(p=>p.form);
+  const pad = (Math.max(...vals)-Math.min(...vals) || 10) * 0.25;
+  const min = Math.min(...vals, m.floor ?? Infinity)-pad;
+  const max = Math.max(...vals, m.target ?? -Infinity)+pad;
   const sc = yAxis(f, min, max, niceTicks(min,max,4), v=>v.toFixed(0));
   const X = i => f.x0 + (pts.length<2?0.5:i/(pts.length-1))*f.iw;
-  f.svg.appendChild(el('path',{d:pts.map((p,i)=>`${i?'L':'M'}${X(i)} ${sc(p.cadence)}`).join(' '),
+  f.svg.appendChild(el('path',{d:pts.map((p,i)=>`${i?'L':'M'}${X(i)} ${sc(p.form)}`).join(' '),
     fill:'none', stroke:'var(--ink2)','stroke-width':2,
     'stroke-linejoin':'round','stroke-linecap':'round'}));
   pts.forEach((p,i)=>{
-    const c = el('circle',{cx:X(i), cy:sc(p.cadence), r:4, fill:'var(--ink2)',
+    const c = el('circle',{cx:X(i), cy:sc(p.form), r:4, fill:'var(--ink2)',
       stroke:'var(--surface)','stroke-width':2});
     c.addEventListener('mousemove', e => showTip(e,
-      `${p.date}\n${p.cadence.toFixed(0)} spm · ${fmt(p.km,2)} km\n${paceStr(p.pace)}/km · HR ${fmt(p.hr,0)}`));
+      `${p.date}\n${p.form.toFixed(0)} ${m.unit} · ${fmt(p.km,2)} km\n${paceStr(p.pace)}/km · HR ${fmt(p.hr,0)}`));
     c.addEventListener('mouseleave', hideTip);
     f.svg.appendChild(c);
   });
-  refLine(f, sc(168), '168 target', 'var(--muted)');
+  if(m.target) refLine(f, sc(m.target), `${m.target} target`, 'var(--muted)');
   [0, pts.length-1].forEach(i => pts[i] && f.svg.appendChild(
     el('text',{x:X(i), y:f.y0+15,'text-anchor':i?'end':'start',
       fill:'var(--muted)','font-size':10},
@@ -537,14 +505,17 @@ function paceChart(mount, runs){
 
 // --- render ------------------------------------------------------------------
 /* State is carried by a small dot, never by coloured type — a page of coloured
-   numbers reads as decoration and stops signalling anything. */
+   numbers reads as decoration and stops signalling anything. A level of null
+   means "not measured yet" and draws a hollow dot: a missing night that renders
+   identically to a passing one is the one mistake this page must not make. */
 const LVL = {2:'var(--crit)', 1:'var(--warn)', 0:'var(--good)'};
-const dot = lvl => lvl ? `<i class="dot" style="background:${LVL[lvl]}"></i>` : '';
+const dot = lvl => lvl==null ? '<i class="dot none"></i>'
+                             : `<i class="dot" style="background:${LVL[lvl]}"></i>`;
 
-function tile(label, val, note, lvl){
-  return `<div class="card tile"><div class="label">${dot(lvl)}${label}</div>
-    <div class="val">${val}</div>
-    <div class="note">${note||''}</div></div>`;
+function tile(c){
+  return `<div class="card tile"><div class="label">${dot(c.lvl)}${c.long}</div>
+    <div class="val">${c.val}</div>
+    <div class="note">${c.note||''}</div></div>`;
 }
 const KIND = {run:'RUN', cross:'CROSS', strength:'STRENGTH', rest:'REST'};
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -553,73 +524,133 @@ function dayName(iso){
   return DOW[new Date(Date.UTC(y,m-1,d)).getUTCDay()];
 }
 
-/* One pass over the numbers produces every judgement on the page: the verdict,
-   the reasons under it and the colour of each chip. The verdict is only ever a
-   summary of `items` — it has no thresholds of its own to drift out of step. */
-function assess(){
-  const s = D.stats;
-  const hrvLow = s.hrv_night!=null && s.hrv_lo!=null && s.hrv_night < s.hrv_lo;
-  const lastCad = D.runs.filter(r=>r.cadence).at(-1);
-  const items = [];
+/* The six checks, and the only place a threshold is written down. Every
+   judgement on the page reads from this one list: the pill row is the list, the
+   reasons under the verdict are the entries that lit up, the tiles are the same
+   entries again with more room. Adding a metric here adds it in all three
+   places — which is the only arrangement in which the summary and the pills
+   cannot drift out of step with each other.
 
-  if(s.impact_acwr>1.3) items.push({lvl:2,
-    head:'Impact load is over the ceiling',
-    why:`ACWR ${fmt(s.impact_acwr,2)} against a 1.30 limit — ${fmt(s.impact_acute,1)} km this week
-         versus a ${fmt(s.impact_chronic,1)} km chronic average. Policy §4: cut running 20% next week.`});
-  if(s.aerobic_acwr>1.5) items.push({lvl:2,
+   `lvl` is 0 clear / 1 watch / 2 over the limit, or null when there is nothing
+   to judge yet. `head` and `why` are the prose used if the check lights up, so
+   a lit pill always has an explanation waiting for it upstairs. */
+function checks(){
+  const s = D.stats;
+  const cadRun = D.runs.filter(r=>r.cadence).at(-1);
+  const cad = cadRun ? cadRun.cadence : null;
+  const hrvLow = s.hrv_night!=null && s.hrv_lo!=null && s.hrv_night < s.hrv_lo;
+
+  const lImpact  = s.impact_acwr==null ? null
+                 : s.impact_acwr>1.3 ? 2 : s.impact_acwr>1.15 ? 1 : 0;
+  const lAerobic = s.aerobic_acwr==null ? null : s.aerobic_acwr>1.5 ? 2 : 0;
+  const lRun     = s.run_km_7d==null ? null : s.run_km_7d>9 ? 1 : 0;
+  const lHrv     = s.hrv_night==null ? null : hrvLow ? 1 : 0;
+  const lSleep   = s.sleep_score==null ? null : s.sleep_score<70 ? 1 : 0;
+  const lCad     = cad==null ? null : cad<162 ? 1 : 0;
+
+  return [{
+    lvl:lImpact, label:'Impact ACWR', long:'Impact ACWR',
+    val:fmt(s.impact_acwr,2),
+    note:`${fmt(s.impact_acute,1)} vs ${fmt(s.impact_chronic,1)} km · ceiling 1.30`,
+    head:lImpact===2 ? 'Impact load is over the ceiling'
+                     : 'Impact load is nearing the ceiling',
+    why:lImpact===2
+      ? `ACWR ${fmt(s.impact_acwr,2)} against a 1.30 limit — ${fmt(s.impact_acute,1)} km this week
+         versus a ${fmt(s.impact_chronic,1)} km chronic average. Policy §4: cut running 20% next week.`
+      : `ACWR ${fmt(s.impact_acwr,2)} — inside the 1.30 limit but past 1.15, on
+         ${fmt(s.impact_acute,1)} km this week against a ${fmt(s.impact_chronic,1)} km chronic
+         average. Run the week as written rather than adding to it.`
+  },{
+    lvl:lAerobic, label:'Aerobic ACWR', long:'Aerobic ACWR',
+    val:fmt(s.aerobic_acwr,2),
+    note:`${fmt(s.aerobic_acute,0)} vs ${fmt(s.aerobic_chronic,0)} · ceiling 1.50`,
     head:'Aerobic load is over the ceiling',
     why:`ACWR ${fmt(s.aerobic_acwr,2)} against a 1.50 limit — ${fmt(s.aerobic_acute,0)} TRIMP
-         versus a ${fmt(s.aerobic_chronic,0)} chronic average.`});
-  if(hrvLow) items.push({lvl:1,
+         versus a ${fmt(s.aerobic_chronic,0)} chronic average.`
+  },{
+    lvl:lRun, label:'Run, 7d', long:'Running, 7 days',
+    val:fmt(s.run_km_7d,1)+' km', note:'Phase A cap: 9 km',
+    head:'Weekly running is over the phase cap',
+    why:`${fmt(s.run_km_7d,1)} km in the last 7 days against the 9 km cap Phase A sets.
+         The cap is on volume alone — it holds even when the ACWR looks calm.`
+  },{
+    lvl:lHrv, label:'HRV', long:'Overnight HRV',
+    val:s.hrv_night==null ? '–' : fmt(s.hrv_night,0)+' ms',
+    note:`baseline ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms`,
     head:'Overnight HRV below baseline',
     why:`${fmt(s.hrv_night,0)} ms against a ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms baseline.
-         One signal only — a veto needs RHR ≥ 56 as well (RHR is ${fmt(s.rhr,0)}).`});
-  if(lastCad && lastCad.cadence<162) items.push({lvl:1,
+         One signal only — a veto needs RHR ≥ 56 as well (RHR is ${fmt(s.rhr,0)}).`
+  },{
+    lvl:lSleep, label:'Sleep', long:'Last sleep',
+    val:s.sleep_score==null ? '–' : fmt(s.sleep_score,0),
+    note:`RHR ${fmt(s.rhr,0)} · ${s.sleep_date||''}`,
+    head:'Sleep score under 70',
+    why:`${fmt(s.sleep_score,0)} on the night of ${s.sleep_date||'the last reading'}.
+         One poor night is not a veto; it is a reason to keep the session easy.`
+  },{
+    lvl:lCad, label:'Cadence', long:'Last run cadence',
+    val:cad==null ? '–' : cad.toFixed(0)+' spm',
+    note:'floor 162 · target 168',
     head:'Cadence under the floor',
-    why:`Last run ${lastCad.cadence.toFixed(0)} spm, below the 162 floor and well under the
-         168 target. Shuffling raises bone load at the same pace.`});
-
-  if(!items.length) items.push({lvl:0, head:'Nothing is outside its limit',
-    why:'Every channel is inside its ceiling and readiness is normal. Run the plan as written.'});
-
-  const lvl = items.reduce((m,i)=>Math.max(m,i.lvl), 0);
-  const verdict = lvl===2 ? 'Back off' : lvl===1 ? 'Proceed, but watch it' : 'All clear';
-  return {items, lvl, verdict, hrvLow, lastCad};
+    why:`Last run ${fmt(cad,0)} spm, below the 162 floor and well under the
+         168 target. Shuffling raises bone load at the same pace.`
+  }];
 }
 
-function chip(k, v, lvl){
-  return `<span class="chip">${dot(lvl)}<span class="k">${k}</span><b>${v}</b></span>`;
+const listing = xs => xs.length < 2 ? (xs[0] || '')
+  : xs.slice(0,-1).join(', ') + ' and ' + xs.at(-1);
+
+/* The verdict is only ever a summary of the checks above — it has no thresholds
+   of its own to drift, and the reasons are literally the lit rows.
+
+   A check with no reading is not a passing check, so the verdict says what it
+   could not see. "All clear" on three unmeasured channels is the kind of quiet
+   overstatement that gets someone to run on a shin that needed the rest. */
+function assess(){
+  const cs = checks();
+  const lit = cs.filter(c => c.lvl >= 1).sort((a,b) => b.lvl - a.lvl);
+  const gaps = cs.filter(c => c.lvl == null);
+  const blind = gaps.length === cs.length;   // nothing has reported at all
+  const many = gaps.length > 1;
+
+  const lvl = lit.length ? lit[0].lvl : 0;
+  const verdict = blind ? 'Nothing measured yet'
+                : lvl===2 ? 'Back off'
+                : lvl===1 ? 'Proceed, but watch it' : 'All clear';
+  /* Named rather than counted — there are only ever six, and which one is
+     missing changes what you'd do about it. */
+  const gap = blind || !gaps.length ? ''
+            : `${listing(gaps.map(c => c.label))} ${many?'have':'has'} not reported`;
+
+  const items = lit.length ? lit : [ blind
+    ? {lvl:null, head:'Nothing has reported yet',
+       why:`No channel has a reading for this window, so there is nothing to judge.
+            This is not a clear result — it is an absent one.`}
+    : gaps.length
+    ? {lvl:0, head:'Nothing that reported is outside its limit',
+       why:`Every channel with a reading is inside its ceiling. ${listing(gaps.map(c => c.label))}
+            ${many?'have':'has'} not come in yet, so ${many?'they are':'it is'} not part of this
+            verdict — treat it as clear on ${cs.length - gaps.length} of ${cs.length}.`}
+    : {lvl:0, head:'Nothing is outside its limit',
+       why:'Every channel is inside its ceiling and readiness is normal. Run the plan as written.'}];
+
+  return {checks:cs, items, lvl, verdict, gap, dotLvl: blind ? null : lvl};
 }
 
 function renderStatus(a){
-  const s = D.stats;
   $('#status').innerHTML = `
     <div class="status">
-      <div class="verdict"><i class="dot" style="background:${LVL[a.lvl]}"></i>${a.verdict}</div>
+      <div class="verdict">${dot(a.dotLvl)}${a.verdict}
+        ${a.gap ? `<span class="gap">${a.gap}</span>` : ''}</div>
       <div class="reasons">${a.items.map(i =>
-        `<div class="flag"><i class="dot" style="background:${LVL[i.lvl]}"></i>
+        `<div class="flag">${dot(i.lvl)}
            <span><b>${i.head}.</b> <span class="why">${i.why}</span></span></div>`).join('')}</div>
-      <div class="chips">
-        ${chip('Impact ACWR', fmt(s.impact_acwr,2), s.impact_acwr>1.3?2:s.impact_acwr>1.15?1:0)}
-        ${chip('Aerobic ACWR', fmt(s.aerobic_acwr,2), s.aerobic_acwr>1.5?2:0)}
-        ${chip('Run, 7d', fmt(s.run_km_7d,1)+' km', s.run_km_7d>9?1:0)}
-        ${chip('HRV', s.hrv_night==null?'–':fmt(s.hrv_night,0)+' ms', a.hrvLow?1:0)}
-        ${chip('Sleep', s.sleep_score==null?'–':fmt(s.sleep_score,0), s.sleep_score<70?1:0)}
-        ${a.lastCad ? chip('Cadence', a.lastCad.cadence.toFixed(0)+' spm',
-                           a.lastCad.cadence<162?1:0) : ''}
-      </div>
+      <div class="chips">${a.checks.map(c =>
+        `<span class="chip">${dot(c.lvl)}<span class="k">${c.label}</span><b>${c.val}</b></span>`
+        ).join('')}</div>
     </div>`;
 
-  $('#tiles').innerHTML =
-    tile('Impact ACWR', fmt(s.impact_acwr,2), `${fmt(s.impact_acute,1)} vs ${fmt(s.impact_chronic,1)} km · ceiling 1.30`,
-         s.impact_acwr>1.3?2:s.impact_acwr>1.15?1:0) +
-    tile('Aerobic ACWR', fmt(s.aerobic_acwr,2), `${fmt(s.aerobic_acute,0)} vs ${fmt(s.aerobic_chronic,0)} · ceiling 1.50`,
-         s.aerobic_acwr>1.5?2:0) +
-    tile('Running, 7 days', fmt(s.run_km_7d,1)+' km', 'Phase A cap: 9 km', s.run_km_7d>9?1:0) +
-    tile('Overnight HRV', s.hrv_night==null?'–':fmt(s.hrv_night,0)+' ms',
-         `baseline ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms`, a.hrvLow?1:0) +
-    tile('Last sleep', s.sleep_score==null?'–':fmt(s.sleep_score,0),
-         `RHR ${fmt(s.rhr,0)} · ${s.sleep_date||''}`, s.sleep_score<70?1:0);
+  $('#tiles').innerHTML = a.checks.map(tile).join('');
 }
 
 /* Which day the card above the strip is showing. null means "today" (or the
