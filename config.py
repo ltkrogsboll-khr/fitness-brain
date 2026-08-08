@@ -124,9 +124,46 @@ DEFAULTS = {
     # Where the CSVs come from. Files in data/raw/ are routed by substring match
     # on the filename, and columns are read by the header names below -- so a
     # different vendor's export is a config change, not a code change.
+    #
+    # If a number goes missing from the dashboard, run build.py and read the
+    # Ingest report: unmatched files, absent columns and unparseable dates are
+    # all named there rather than skipped silently.
     "source": {
         "name": "your watch",
         "files": {"activities": "activities", "sleep": "sleep", "hrv": "hrv"},
+
+        # Cell values that mean "no reading".
+        "missing": ["", "--", "---", "N/A", "n/a", "null"],
+
+        # Decimal convention. "auto" decides per file from the values themselves
+        # ('6,56' votes comma, '6.56' votes dot); thousands separators are the
+        # ambiguous case and get no vote. Force it if a file has too few
+        # fractional numbers to sniff.
+        "decimal": "auto",  # auto | comma | dot
+
+        # Tried in order against the activity timestamp column. Deliberately
+        # unambiguous by default -- adding both %d/%m/%Y and %m/%d/%Y here would
+        # silently pick one. Add the single format your export actually uses.
+        "datetime_formats": ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z",
+                             "%Y-%m-%d %H:%M"],
+        # Same, for the sleep and HRV date columns.
+        "date_formats": ["%Y-%m-%d"],
+
+        # Shapes a duration or pace cell may take, tried in order:
+        #   hms      '00:44:47', '6:50'  -- right-aligned, last part is seconds
+        #   hm       '6:24'              -- left-aligned, first part is hours
+        #   hm_text  '6h 24min'          -- needs a unit letter
+        #   minutes  '384'               -- bare number of minutes
+        #   seconds  '23087'             -- bare number of seconds
+        "duration_formats": {
+            "activity": ["hms"],
+            "sleep": ["hm_text", "hm", "minutes"],
+        },
+
+        # What distances are exported in. Labels the dashboard, and sets what
+        # metre_distance_types below converts into.
+        "distance_unit": "km",  # km | mi
+
         "activity_columns": {
             "type": "Activity Type", "date": "Date", "title": "Title",
             "distance": "Distance", "duration": "Time", "avg_hr": "Avg HR",
@@ -137,16 +174,23 @@ DEFAULTS = {
             "gct": "Avg Ground Contact Time", "gct_balance": "Avg GCT Balance",
             "calories": "Calories",
         },
+        # `date` null means "the first column", which is where both of these
+        # exports put it.
         "sleep_columns": {
+            "date": None,
             "score": "Score", "rhr": "Resting Heart Rate",
             "body_battery": "Body Battery", "respiration": "Respiration",
             "hrv_7d": "HRV Status", "quality": "Quality",
             "duration": "Duration", "need": "Sleep Need",
             "bedtime": "Bedtime", "waketime": "Wake Time",
         },
-        "hrv_columns": {"overnight": "Overnight HRV", "baseline": "Baseline"},
-        # Distances exported in metres rather than km, by activity-type
-        # substring. Applied before anything else reads the number.
+        # If the date column holds year-less days ('8 Aug'), build.py infers the
+        # year by walking backwards from the newest row. English month
+        # abbreviations only; anything matching date_formats is used as-is.
+        "hrv_columns": {"date": None, "overnight": "Overnight HRV",
+                        "baseline": "Baseline"},
+        # Distances exported in metres rather than distance_unit, by
+        # activity-type substring. Applied before anything else reads the number.
         "metre_distance_types": ["Swim"],
     },
 

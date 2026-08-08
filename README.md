@@ -41,7 +41,7 @@ the page and the policy from quoting different ceilings at you.
 | `readiness` | Sleep, RHR and HRV thresholds |
 | `journal` | The fields you score yourself on |
 | `plan` | Session kinds, and how each decides it was done |
-| `source` | Filename patterns and CSV column names for your export |
+| `source` | Everything about your CSV export — filenames, columns, date and duration formats, decimals, units. See [Using a different export](#using-a-different-export) |
 | `coach` | What the coach calls itself, and its escalation rule |
 
 Anything you leave out falls back to a neutral default, so a partial config is
@@ -96,16 +96,53 @@ upserts each export into `data/daily.csv`, so after a couple of months you hold
 more history than the vendor will hand back, which is what makes a real 28-day
 chronic baseline possible.
 
+## Using a different export
+
+Nothing about the engine assumes a particular vendor; `config.source` holds the
+whole contract with your CSVs.
+
+| Key | Assumption it removes |
+|---|---|
+| `files` | Which filename substring routes to activities / sleep / HRV |
+| `*_columns` | Header names. `null` disables one; `date: null` means "first column" |
+| `datetime_formats`, `date_formats` | `strptime` patterns, tried in order. Defaults are deliberately unambiguous — add the one format your export uses rather than both `%d/%m/%Y` and `%m/%d/%Y` |
+| `duration_formats` | `hms` `00:44:47` · `hm` `6:24` · `hm_text` `6h 24min` · `minutes` · `seconds` |
+| `decimal` | `auto` sniffs each file (`6,56` votes comma, `6.56` dot); force `comma`/`dot` if a file has too few fractional numbers to tell |
+| `missing` | Cell values meaning "no reading" |
+| `distance_unit` | `km` or `mi` — labels, and what `metre_distance_types` converts into |
+
+**Read the ingest report.** `build.py` prints one line per file plus a `!` line for
+anything it skipped, so a wrong mapping is a sentence rather than an empty chart:
+
+```
+Ingest
+  Activities.csv  activities read   120  kept   120  skipped    0  comma-decimal
+  Sleep.csv       sleep      read    28  kept    27  skipped    1  dot-decimal
+  ! Body Composition.csv: matches no pattern in config.source.files — not read
+  ! activity: no column named 'Average Heartrate' — fix or null out config.source.activity_columns
+  ! activities: 3 rows skipped, unparsed timestamp '08/02/2026 06:00' — add its format to config.source.datetime_formats
+```
+
+The dashboard's **Rebuild from CSVs** shows the same report, but only when
+something was skipped.
+
+Two assumptions are still in code, and both are opt-in: year-less HRV dates
+(`8 Aug`, English months, inferred by walking backwards from the newest row —
+used only when the value doesn't match `date_formats`), and running/cycling
+form fields like GCT balance.
+
+If your source is far enough from a CSV export that none of this fits, the better
+seam is `data/daily.csv` and `data/sessions.csv`. That schema is the real
+interface: write those two files yourself and the dashboard, ACWR channels,
+context and coach all work unchanged. (Their distance columns are named `_km`
+whatever `distance_unit` says; the values are in your unit, the names are just
+history.)
+
 ## Scope
 
 Built for sports where heart rate is the load signal — running, cycling, swimming,
 rowing. TRIMP needs an HR stream, so strength-only training has no aerobic load to
 model.
-
-The parsing is shaped by one watch vendor's CSV format. Column names and filename
-patterns are configurable (`config.source`), but the quirks around them — year-less
-HRV dates, metres-vs-km distances, comma decimals — may need code for a genuinely
-different export.
 
 **This is not medical advice.** It's a tool for organising your own training data
 against rules you wrote yourself. Pain that is worsening, focal, or present at rest

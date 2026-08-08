@@ -163,6 +163,12 @@ input,textarea{font:inherit;background:var(--page);color:var(--ink);
 input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 .jlist{font-size:12px;color:var(--ink2);max-height:190px;overflow:auto;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.7}
+/* build.py's ingest report — only worth screen space when it says something */
+#ingest{display:none;margin:0 0 14px;padding:9px 11px;border-radius:8px;
+  border:1px solid var(--border);background:var(--surface);font-size:12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.6;
+  white-space:pre-wrap;overflow-x:auto;color:var(--ink2)}
+#ingest.bad{border-color:var(--warn)}
 #log{min-height:40px;max-height:440px;overflow:auto;display:flex;
   flex-direction:column;gap:12px;padding:2px}
 #log:empty::before{content:"Ask about the plan, a rule, how a session went, or what to do about today.";
@@ -195,6 +201,7 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 </header>
 
 <h2>Status</h2>
+<pre id="ingest"></pre>
 <div id="status"></div>
 
 <details class="dis" id="d-metrics">
@@ -252,6 +259,8 @@ let C = null;   // D.config — every sport-specific label and threshold
 
 const fmt = (v, d=1) => v==null ? '–' : (+v).toFixed(d);
 const paceStr = s => s==null ? '–' : `${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
+// Whatever config.source.distance_unit says the exports are in — km or mi.
+const DU = () => C?.source?.distance_unit || 'km';
 
 function showTip(e, text){
   tip.textContent = text; tip.style.opacity = 1;
@@ -274,7 +283,7 @@ function buildHelp(c){
     .map(([k,v]) => `${k.toLowerCase()} ${v}`).join(' · ');
   return {
     mech: `<h5>${c.mechanical.label} load per week</h5>
-      <p>Bars are <b>${c.mechanical.unit}</b> per calendar week — every km scaled by
+      <p>Bars are <b>${c.mechanical.unit}</b> per calendar week — every ${DU()} scaled by
       how much it costs the tissue you're protecting${weights ? `: ${weights}, and
       everything else 0.0` : ''}. The dashed line is the <b>chronic average</b>, the
       same figure over the last 28 days divided by four: a rolling picture of what
@@ -448,7 +457,7 @@ function formChart(mount, sessions){
     const c = el('circle',{cx:X(i), cy:sc(p.form), r:4, fill:'var(--ink2)',
       stroke:'var(--surface)','stroke-width':2});
     c.addEventListener('mousemove', e => showTip(e,
-      `${p.date}\n${p.form.toFixed(0)} ${m.unit} · ${fmt(p.km,2)} km\n${paceStr(p.pace)}/km · HR ${fmt(p.hr,0)}`));
+      `${p.date}\n${p.form.toFixed(0)} ${m.unit} · ${fmt(p.km,2)} ${DU()}\n${paceStr(p.pace)}/${DU()} · HR ${fmt(p.hr,0)}`));
     c.addEventListener('mouseleave', hideTip);
     f.svg.appendChild(c);
   });
@@ -500,7 +509,7 @@ function paceChart(mount, sessions){
       fill:recent?'var(--ink)':'var(--axis)', stroke:'var(--surface)','stroke-width':2,
       'fill-opacity':recent?1:.65});
     c.addEventListener('mousemove', e => showTip(e,
-      `${p.date}\n${paceStr(p.pace)}/km at HR ${p.hr.toFixed(0)}\n${fmt(p.km,2)} km${
+      `${p.date}\n${paceStr(p.pace)}/${DU()} at HR ${p.hr.toFixed(0)}\n${fmt(p.km,2)} ${DU()}${
         p.form!=null ? ` · ${p.form.toFixed(0)} ${C.form_metric.unit}` : ''}`));
     c.addEventListener('mouseleave', hideTip);
     f.svg.appendChild(c);
@@ -835,7 +844,7 @@ function render(){
   renderCharts();
   renderJournalInput();
 
-  const pu = C.primary.enabled ? `${C.primary.label} ${C.primary.unit}` : 'km';
+  const pu = C.primary.enabled ? `${C.primary.label} ${C.primary.unit}` : DU();
   $('#t14').innerHTML =
     `<tr><th>Date</th><th>Day</th><th>Activities</th><th>${pu}</th><th>${C.aerobic.unit}</th><th>Sleep</th><th>RHR</th><th>HRV</th></tr>` +
     D.last14.slice().reverse().map(r=>`<tr><td>${r.date}</td><td>${r.dow||''}</td>
@@ -859,10 +868,19 @@ async function load(){
   render();
 }
 
+// The ingest report is the only place a mis-mapped column shows up as words
+// rather than as an empty chart, so a rebuild that skipped rows or couldn't find
+// a column says so here instead of scrolling past in a terminal.
 $('#rebuild').onclick = async e => {
   const b=e.target; b.disabled=true; b.textContent='Rebuilding…';
   const r = await (await fetch('/api/build',{method:'POST',body:'{}'})).json();
   await load();
+  const out = (r.out||'').trim();
+  const bad = !r.ok || /^\s*!/m.test(out) || /skipped\s+[1-9]/.test(out);
+  const box = $('#ingest');
+  box.textContent = out;
+  box.className = bad ? 'bad' : '';
+  box.style.display = (out && bad) ? 'block' : 'none';
   b.disabled=false; b.textContent = r.ok ? 'Rebuild from CSVs' : 'Rebuild failed';
 };
 

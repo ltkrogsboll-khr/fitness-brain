@@ -90,6 +90,22 @@
     }
   },
 
+  "_source_comment": "Everything below is already the default — it is spelled out here only to show what the knobs are. Delete the whole block unless your export differs. If a number goes missing, run build.py and read the Ingest report: it names the file, the column and the config key.",
+  "source": {
+    "name": "your watch",
+    "files": { "activities": "activities", "sleep": "sleep", "hrv": "hrv" },
+    "decimal": "auto",
+    "missing": ["", "--", "---", "N/A", "n/a", "null"],
+    "datetime_formats": ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M"],
+    "date_formats": ["%Y-%m-%d"],
+    "duration_formats": {
+      "activity": ["hms"],
+      "sleep": ["hm_text", "hm", "minutes"]
+    },
+    "distance_unit": "km",
+    "metre_distance_types": ["Swim"]
+  },
+
   "coach": {
     "role": "running coach",
     "system": "a shin-aware training system",
