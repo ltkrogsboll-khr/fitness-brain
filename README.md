@@ -100,4 +100,15 @@ chronic baseline possible.
 
 Built for sports where heart rate is the load signal — running, cycling, swimming,
 rowing. TRIMP needs an HR stream, so strength-only training has no aerobic load to
-model. Not medical advice.
+model.
+
+The parsing is shaped by one watch vendor's CSV format. Column names and filename
+patterns are configurable (`config.source`), but the quirks around them — year-less
+HRV dates, metres-vs-km distances, comma decimals — may need code for a genuinely
+different export.
+
+**This is not medical advice.** It's a tool for organising your own training data
+against rules you wrote yourself. Pain that is worsening, focal, or present at rest
+belongs with a clinician, not a dashboard.
+
+MIT licensed — see [LICENSE](LICENSE).

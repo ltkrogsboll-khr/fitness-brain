@@ -304,6 +304,16 @@ def fnum(r, k):
 def main():
     today = date.today()
 
+    # First run after a clone: make the drop-box rather than fail on it.
+    if not os.path.isdir(RAW):
+        os.makedirs(RAW, exist_ok=True)
+        pat = CFG["source"]["files"]
+        print(f"Created {os.path.relpath(RAW, ROOT)}/ — it was empty.\n"
+              f"Export your CSVs there, then run this again. Filenames are matched\n"
+              f"on the substrings {', '.join(repr(v) for v in pat.values())} "
+              f"(configurable in config.json).")
+        return
+
     acts, sleep, hrv = [], {}, {}
     for fn in os.listdir(RAW):
         p = os.path.join(RAW, fn)
