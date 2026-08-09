@@ -1,9 +1,26 @@
 # Ingest
 
+Two paths in, both swappable, both ending in records the engine already knows.
+
 ```
-data/raw/*  ->  [ adapter ]  ->  sessions / sleep / hrv  ->  [ the engine ]
-                 swappable        the contract, schema.py    never changes
+data/raw/*         ->  [ adapter ]  ->  sessions / sleep / hrv  ->  [ engine ]
+one bulk export        swappable        the contract, schema.py     never
+of everything                                                       changes
+
+data/activities/*  ->  [ reader ]   ->  Activity  ->  [ analyze.py ]
+one file, one          swappable        the contract,
+session, per second                     activity.py
 ```
+
+The **adapter** path is the history: weeks of workouts, sleep and HRV in one
+export, one row per session. The **reader** path is one session in full detail,
+sampled second by second — which is the only way to know that a run averaging
+154 spm was actually held at 171 with a walk home on the end.
+
+They're chosen differently, on purpose. A bulk export folder belongs to one
+vendor, so `config.source.adapter` names the adapter. A single-session file is
+self-describing, so readers are claimed by **file extension** and picked per
+file — a `.fit` and a `.tcx` in the same folder both just work.
 
 Everyone drops their exports in the same place: `data/raw/`. What differs
 between a Garmin user and a Strava user is the adapter that reads them —
@@ -33,6 +50,38 @@ cp ingest/adapters/_template.py ingest/adapters/local/mysource.py
 python3 -m ingest --check      # runs it, writes nothing, reports field coverage
 python3 build.py               # for real
 ```
+
+## Reading a single-session format
+
+Same idea, no config step — a reader declares the extensions it claims and is
+picked per file:
+
+```sh
+python3 -m ingest --readers    # what's installed, and what each one claims
+cp ingest/readers/_template.py ingest/readers/local/tcx.py
+python3 analyze.py somefile.tcx --dry-run    # runs it, writes nothing
+python3 build.py                             # for real
+```
+
+```python
+CONTRACT = 1
+DESCRIPTION = "Garmin TCX"
+EXTENSIONS = (".tcx",)
+
+def read(path, cfg=None) -> Activity
+```
+
+`Activity` holds `session`, `laps` and `records` — one dict per sample, `t` in
+seconds from the start. The field list with units is in `activity.py`. Two
+things are worth getting right on the first try, because neither errors:
+
+- **`start_local` is local wall clock.** It's half the key into
+  `data/sessions.csv`, so a UTC timestamp creates a *second* session for a
+  workout you already have and doubles that day's load. `build.py` prints both
+  rows when it spots this, but not writing the bug is better.
+- **Cadence is in the sport's own unit** — steps per minute on foot. Several
+  formats store a runner's 170 spm as 85 revolutions; double it in the reader,
+  so nothing downstream has to know which sport it's looking at.
 
 ## The contract
 
@@ -85,7 +134,9 @@ rather than writing junk into the database.
 |---|---|
 | `schema.py` | The record shapes, with units. The contract itself |
 | `parsers.py` | CSV reading, decimal-comma sniffing, five duration notations, timezone-dropping timestamps |
-| `fit.py` | Decoding a `.fit` file — one activity at full resolution, for `analyze.py`. Not part of the adapter path |
+| `activity.py` | The *other* contract: one session at full resolution, plus the reader registry |
+| `readers/` | Shipped single-session readers. Upstream owns these |
+| `readers/local/` | Yours. Upstream never writes here |
 | `report.py` | What ingest tells you it did |
 | `adapters/` | Shipped adapters. Upstream owns these |
 | `adapters/local/` | Yours. Upstream never writes here |

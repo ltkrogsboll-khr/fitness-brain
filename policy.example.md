@@ -5,8 +5,8 @@ Claude reads it *before* `context.md` every session and applies it, rather than
 forming a fresh opinion each time. Change it deliberately, bump the version,
 note what changed and why in the changelog.
 
-> **This is a template.** Copy it to `policy.md` and rewrite it for yourself.
-> `policy.md` is gitignored, so your real profile stays on your machine. The
+> **This is a template.** Copy it to `policy.md` and rewrite it for yourself, or have a good LLM agent rewrite it based on your input.
+> Make sure `policy.md` stays gitignored, so your real profile stays on your machine. The
 > numbers below are placeholders, not recommendations — and none of this is
 > medical advice.
 

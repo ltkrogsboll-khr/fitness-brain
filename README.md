@@ -96,9 +96,17 @@ Drop a `.fit` file in `data/activities/` and rebuild. That's it — `build.py`
 reads the folder, so the dashboard's **Rebuild** button is the whole workflow.
 
 The folder is named for what the files are rather than who wrote them: Garmin,
-Wahoo, Coros and Suunto all export `.fit`. Only `.fit` decodes today
-(`ingest/fit.py`, stdlib, no dependency); anything else in the folder gets named
-in the ingest report rather than ignored.
+Wahoo, Coros and Suunto all export `.fit`. Which formats work depends on which
+**readers** exist in `ingest/readers/` — the single-session sibling of
+`ingest/adapters/`, same swappable contract, same `local/` folder that upstream
+never touches. `.fit` ships (stdlib, no dependency); anything else in the folder
+gets named in the ingest report rather than ignored.
+
+Readers are claimed by **file extension**, not named in config, because a
+single-session file is self-describing in a way a bulk export folder isn't — so
+a `.fit` from your watch and a `.tcx` from somewhere else can sit side by side
+and both just work. `python3 -m ingest --readers` lists them;
+`ingest/activity.py` is the contract, with units per field, for writing another.
 
 **Why bother, when the CSV already has cadence and stride?** Because a CSV row
 is one average per session, and an average taken over a run that ends in a walk

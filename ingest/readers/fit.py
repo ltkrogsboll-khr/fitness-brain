@@ -1,31 +1,29 @@
 #!/usr/bin/env python3
 """Reading a .fit file — the binary export behind a single activity.
 
-`parsers.py` handles the CSV a watch vendor emails you; this handles the file
-the watch actually wrote. The difference that matters is not the field list —
-Garmin's Activities.csv already carries cadence, stride, GCT and power — but the
+CONTRACT = 1
+DESCRIPTION = "Garmin/ANT+ .fit (also Wahoo, Coros, Suunto)"
+EXTENSIONS = (".fit",)
+
+`parsers.py` handles the CSV a vendor emails you; this handles the file the
+watch actually wrote. The difference that matters is not the field list — a
+Garmin Activities.csv already carries cadence, stride, GCT and power — but the
 *resolution*. A CSV row is one average per session. A .fit file is one sample
 per second, so it can answer questions an average structurally cannot:
 
     "my cadence averaged 154" is a session summary.
     "I held 171 for sixteen minutes, then walked home" is what happened.
 
-Both sentences describe the same run. Only the second one is useful when the
-walk home is 20% of the elapsed time.
+Both sentences describe the same run. Only the second is useful when the walk
+home is 20% of the elapsed time.
 
 Nothing here is Garmin-specific: FIT is an ANT+ standard and this decodes the
 container. What *is* vendor-flavoured is PROFILE below — the field numbers are
 global, but which ones a given watch bothers to record is not.
 
-No third-party dependency on purpose. The FIT container is a
-definition-message/data-message protocol and decoding it is ~150 lines; the
-rest of this repo runs on the standard library and this file keeps that true.
-
-    from ingest.fit import Activity
-    a = Activity("23910569221_ACTIVITY.fit")
-    a.start_local           -> datetime, wall-clock, as the CSV would write it
-    a.session["avg_hr"]     -> 145
-    a.records[0]["heart_rate"]
+No third-party dependency on purpose. The container is a definition-message /
+data-message protocol and decoding it is ~150 lines; the rest of this repo runs
+on the standard library and this file keeps that true.
 """
 
 from __future__ import annotations
@@ -34,13 +32,19 @@ import os
 import struct
 from datetime import datetime, timedelta
 
+from ingest.activity import Activity, ActivityError
+
+CONTRACT = 1
+DESCRIPTION = "Garmin/ANT+ .fit (also Wahoo, Coros, Suunto)"
+EXTENSIONS = (".fit",)
+
 # FIT counts seconds from this instant, UTC.
 FIT_EPOCH = datetime(1989, 12, 31)
 
 # Base type number (the low 5 bits of the base-type byte) ->
-# (struct char, size, the value meaning "no reading").
-# The invalid value is per-type and always the largest representable one, except
-# for the z-types where it is zero -- that is the entire point of a z-type.
+# (struct char, size, the value meaning "no reading"). The invalid value is the
+# largest representable one, except for the z-types where it is zero — that is
+# the entire point of a z-type.
 BASE = {
     0:  ("B", 1, 0xFF),                  # enum
     1:  ("b", 1, 0x7F),                  # sint8
@@ -61,13 +65,14 @@ BASE = {
     16: ("Q", 8, 0x00),                  # uint64z
 }
 
-# Global message numbers we read. Everything else in the file -- and a Garmin
-# file has plenty, most of it undocumented telemetry -- is decoded and dropped.
-FILE_ID, SESSION, LAP, RECORD, EVENT, ACTIVITY = 0, 18, 19, 20, 21, 34
+# Global message numbers we read. Everything else in the file — and a Garmin
+# file has plenty, most of it undocumented telemetry — is decoded and dropped.
+FILE_ID, SESSION, LAP, RECORD, ACTIVITY = 0, 18, 19, 20, 34
 
 # field number -> (name, scale, offset). value = raw / scale - offset.
-# Field numbers are fixed by the FIT profile and are the same on every device;
-# only which ones are *present* varies.
+# Field numbers are fixed by the FIT profile and identical on every device;
+# only which ones are *present* varies. Names here are FIT's own — the
+# translation to the ingest/activity.py contract happens in read().
 PROFILE = {
     SESSION: {
         253: ("timestamp", 1, 0), 2: ("start_time", 1, 0),
@@ -109,9 +114,9 @@ PROFILE = {
     },
     RECORD: {
         253: ("timestamp", 1, 0),
-        0: ("position_lat", 1, 0), 1: ("position_long", 1, 0),
+        0: ("position_lat", 1, 0), 1: ("position_long", 1, 0),  # semicircles
         3: ("heart_rate", 1, 0),
-        4: ("cadence", 1, 0),                 # rpm; see cadence_spm()
+        4: ("cadence", 1, 0),                 # revolutions; doubled in read()
         5: ("distance", 100, 0),              # m
         7: ("power", 1, 0),
         39: ("vertical_oscillation", 10, 0),  # mm
@@ -133,9 +138,9 @@ PROFILE = {
     },
 }
 
-# sport, sub_sport -> the name your CSV export uses for the same activity.
+# sport, sub_sport -> the name a CSV export uses for the same activity.
 # This matters more than it looks: the type string is half the dedupe key into
-# data/sessions.csv, and it selects the config.mechanical weight. Getting it
+# data/sessions.csv and it selects the config.mechanical weight. Getting it
 # wrong doesn't error, it silently creates a second session. Override per sport
 # with config.source.options.fit_sport_names.
 SPORTS = {
@@ -148,32 +153,29 @@ SPORTS = {
 SPORT_FALLBACK = {1: "Running", 2: "Cycling", 5: "Swimming", 11: "Walking",
                   4: "Strength", 17: "Hiking"}
 
-
-class FitError(Exception):
-    """Not a FIT file, or truncated past the point of being readable."""
+# Sports whose cadence FIT stores in revolutions and a human counts in steps.
+FOOT_SPORTS = (1, 11, 17)
+SEMICIRCLE = 180.0 / 2 ** 31
 
 
 # --- The container -----------------------------------------------------------
 def decode(path):
     """-> [(global_message_number, {field_number: value}), ...] in file order.
 
-    Values are raw: no scaling, no field names. Invalid values are dropped to
-    None here, because "0xFFFF" means "no reading" and letting that reach
-    arithmetic is how you get a 65535 bpm heart rate.
+    Values are raw: no scaling, no field names. Invalid values become None here,
+    because 0xFFFF means "no reading" and letting that reach arithmetic is how
+    you get a 65535 bpm heart rate.
     """
     try:
         with open(path, "rb") as f:
             buf = f.read()
     except OSError as e:
-        raise FitError(f"{path}: {e}") from e
+        raise ActivityError(f"{path}: {e}") from e
     if len(buf) < 14 or buf[8:12] != b".FIT":
-        raise FitError(f"{os.path.basename(path)} is not a FIT file "
-                       f"(no '.FIT' signature at byte 8)")
+        raise ActivityError(f"{os.path.basename(path)} is not a FIT file "
+                            f"(no '.FIT' signature at byte 8)")
 
-    header_size = buf[0]
-    data_size = struct.unpack("<I", buf[4:8])[0]
-    pos, end = header_size, min(header_size + data_size, len(buf))
-
+    pos, end = buf[0], min(buf[0] + struct.unpack("<I", buf[4:8])[0], len(buf))
     defs, out, last_ts = {}, [], None
     while pos < end:
         header = buf[pos]
@@ -182,8 +184,7 @@ def decode(path):
         if header & 0x80:
             # Compressed timestamp header: 5 bits of seconds-since-last, which
             # is how a 1 Hz stream avoids spending 4 bytes per second on a clock.
-            local = (header >> 5) & 0x03
-            d = defs.get(local)
+            d = defs.get((header >> 5) & 0x03)
             if not d:
                 break
             vals, pos = _read_data(buf, pos, d)
@@ -211,9 +212,8 @@ def decode(path):
 
 def _read_definition(buf, pos, header, local, defs):
     pos += 1                                   # reserved byte
-    arch = buf[pos]
+    e = ">" if buf[pos] else "<"
     pos += 1
-    e = ">" if arch else "<"
     gnum = struct.unpack(e + "H", buf[pos:pos + 2])[0]
     pos += 2
     n = buf[pos]
@@ -270,103 +270,76 @@ def named(global_num, raw):
     return out
 
 
-def when(seconds, offset=0):
-    """FIT seconds -> datetime, shifted by `offset` seconds of UTC->local."""
-    if seconds is None:
-        return None
-    return FIT_EPOCH + timedelta(seconds=seconds + offset)
+# --- The contract ------------------------------------------------------------
+def read(path, cfg=None):
+    """A .fit file -> ingest.activity.Activity."""
+    msgs = decode(path)
 
+    raw_session = next((v for g, v in msgs if g == SESSION), None)
+    if raw_session is None:
+        raise ActivityError(
+            f"{os.path.basename(path)} has no session message — it may be a "
+            f"settings or monitoring file rather than an activity")
+    session = named(SESSION, raw_session)
 
-def cadence_spm(rec, running=True):
-    """Steps per minute from a record.
+    # FIT stores UTC; every bulk export, and therefore every key in
+    # data/sessions.csv, is local wall-clock. The activity message carries both,
+    # so the offset comes out of the file rather than from this machine's
+    # timezone — which would be wrong for any session recorded on holiday.
+    act = named(ACTIVITY, next((v for g, v in msgs if g == ACTIVITY), {}))
+    ts, local = act.get("timestamp"), act.get("local_timestamp")
+    offset = int(local - ts) if (ts and local) else 0
 
-    FIT stores cadence as *revolutions*, so a runner's 170 spm is recorded as
-    85. Doubling it is correct for running and wrong for cycling, which is why
-    this needs to be told which it is.
-    """
-    c = rec.get("cadence")
-    if c is None:
-        return None
-    c += rec.get("fractional_cadence") or 0
-    return c * 2 if running else c
+    sport = int(session.get("sport") or 0)
+    sub = int(session.get("sub_sport") or 0)
+    names = dict(SPORTS)
+    names.update((cfg or {}).get("source", {}).get("options", {})
+                 .get("fit_sport_names") or {})
+    atype = (names.get((sport, sub)) or names.get(str(sport))
+             or SPORT_FALLBACK.get(sport) or "Other")
+    foot = sport in FOOT_SPORTS
 
+    t0 = session.get("start_time")
+    start_local = (FIT_EPOCH + timedelta(seconds=t0 + offset)) if t0 else None
 
-# --- One activity ------------------------------------------------------------
-class Activity:
-    """A decoded .fit file, in the shapes the rest of the repo wants.
+    # Cadence to the sport's own unit, here in the reader, so that nothing
+    # downstream has to know that FIT counts a runner's 170 spm as 85.
+    if session.get("avg_cadence") is not None:
+        session["avg_cadence"] = (
+            (session["avg_cadence"] + (session.get("avg_fractional_cadence") or 0))
+            * (2 if foot else 1))
+    if session.get("max_cadence") is not None and foot:
+        session["max_cadence"] *= 2
 
-    Timestamps are the fiddly part. FIT stores UTC; every CSV export, and
-    therefore every key in data/sessions.csv, is local wall-clock. The activity
-    message carries both, so the offset is read from the file rather than
-    guessed from the current machine's timezone -- which would be wrong for any
-    run you did on holiday.
-    """
+    laps = []
+    for g, v in msgs:
+        if g != LAP:
+            continue
+        lap = named(LAP, v)
+        if lap.get("avg_cadence") is not None and foot:
+            lap["avg_cadence"] *= 2
+        if lap.get("max_cadence") is not None and foot:
+            lap["max_cadence"] *= 2
+        laps.append(lap)
 
-    def __init__(self, path, sport_names=None):
-        self.path = path
-        self.name = os.path.basename(path)
-        msgs = decode(path)
+    records = []
+    for g, v in msgs:
+        if g != RECORD:
+            continue
+        r = named(RECORD, v)
+        ts = r.pop("timestamp", None)
+        if ts is None or t0 is None:
+            continue
+        r["t"] = float(ts - t0)
+        if r.get("cadence") is not None:
+            r["cadence"] = (r["cadence"] + (r.pop("fractional_cadence", 0) or 0)) \
+                           * (2 if foot else 1)
+        r.pop("fractional_cadence", None)
+        for k in ("position_lat", "position_long"):
+            if r.get(k) is not None:
+                r[k] = r[k] * SEMICIRCLE
+        records.append(r)
 
-        self._raw_session = next((v for g, v in msgs if g == SESSION), None)
-        if self._raw_session is None:
-            raise FitError(f"{self.name} has no session message — it may be a "
-                           f"settings or monitoring file rather than an activity")
-
-        self.session = named(SESSION, self._raw_session)
-        self.laps = [named(LAP, v) for g, v in msgs if g == LAP]
-        self.records = [named(RECORD, v) for g, v in msgs if g == RECORD]
-        self.file_id = named(FILE_ID, next((v for g, v in msgs if g == FILE_ID), {}))
-
-        act = named(ACTIVITY, next((v for g, v in msgs if g == ACTIVITY), {}))
-        ts, local = act.get("timestamp"), act.get("local_timestamp")
-        self.utc_offset_s = int(local - ts) if (ts and local) else 0
-
-        self.sport = int(self.session.get("sport") or 0)
-        self.sub_sport = int(self.session.get("sub_sport") or 0)
-        names = dict(SPORTS)
-        names.update({tuple(k) if isinstance(k, (list, tuple)) else k: v
-                      for k, v in (sport_names or {}).items()})
-        self.type = (names.get((self.sport, self.sub_sport))
-                     or names.get(str(self.sport))
-                     or SPORT_FALLBACK.get(self.sport)
-                     or "Other")
-        # Two different questions. `running` asks whether cadence is counted in
-        # revolutions and so needs doubling -- true of anything on foot.
-        # `is_run` asks whether a cadence floor can separate running from
-        # walking, which only makes sense when the activity is a run: a walk's
-        # own cadence sits right where that floor goes.
-        self.running = self.sport in (1, 11, 17)
-        self.is_run = self.sport == 1
-
-    @property
-    def start_local(self):
-        """Session start as wall-clock — the half of the sessions.csv key."""
-        return when(self.session.get("start_time"), self.utc_offset_s)
-
-    @property
-    def title(self):
-        return self.file_id.get("name") or ""
-
-    def stream(self, field):
-        """[(seconds_from_start, value)] for one record field, gaps dropped."""
-        t0 = self.session.get("start_time")
-        out = []
-        for r in self.records:
-            ts, v = r.get("timestamp"), r.get(field)
-            if ts is None or v is None:
-                continue
-            out.append((ts - t0, v))
-        return out
-
-    def cadence_stream(self):
-        t0 = self.session.get("start_time")
-        out = []
-        for r in self.records:
-            ts, c = r.get("timestamp"), cadence_spm(r, self.running)
-            if ts is not None and c is not None:
-                out.append((ts - t0, c))
-        return out
-
-    def __repr__(self):
-        return (f"Activity({self.name}, {self.type}, {self.start_local}, "
-                f"{len(self.records)} records, {len(self.laps)} laps)")
+    return Activity(path=path, type=atype, start_local=start_local,
+                    session=session, laps=laps, records=records,
+                    is_run=(sport == 1))

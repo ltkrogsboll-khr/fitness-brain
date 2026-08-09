@@ -11,9 +11,11 @@
 
 Drop activity files in `data/activities/`. That folder is named after what the
 files are, not who made them: Garmin, Wahoo, Coros and Suunto all write .fit,
-while other platforms export .tcx or .gpx for the same run. Only .fit decodes
-today (ingest/fit.py) — the folder is the stable part of the contract, the
-format is not.
+while other platforms export .tcx or .gpx for the same run. Which formats work
+is a question of which readers exist in `ingest/readers/` — they are claimed by
+file extension, so a folder holding two formats needs no configuration.
+`python3 -m ingest --readers` lists them; `ingest/activity.py` is the contract
+for writing another.
 
 You do not have to run this by hand. `build.py` reads the same folder on every
 rebuild, so dropping a file and pressing Rebuild in the dashboard is the whole
@@ -49,15 +51,18 @@ import os
 import sys
 
 import config
-from ingest.fit import Activity, FitError, cadence_spm
+from ingest import activity
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ACTIVITIES = os.path.join(ROOT, "data", "activities")
 CFG = config.load()
 
-# What ingest/fit.py can open today. Anything else in the folder is named
-# rather than skipped in silence.
-READABLE = (".fit",)
+
+def readable():
+    """Extensions some reader in ingest/readers/ claims. Asked fresh each time
+    rather than frozen in a constant, so dropping a reader into
+    ingest/readers/local/ starts working without touching this file."""
+    return activity.extensions()
 
 # Fields this script owns, named so they can't collide with the vendor's own
 # averages: `cadence` is what the CSV says, `moving_cadence` is what you did.
@@ -97,10 +102,10 @@ def moving_mask(act, floor):
     """
     out = []
     for r in act.records:
-        if r.get("timestamp") is None:
+        if r.get("t") is None:
             continue
         if act.is_run:
-            c = cadence_spm(r, True)
+            c = r.get("cadence")
             out.append((r, c is not None and c >= floor))
         else:
             s = r.get("speed")
@@ -120,13 +125,13 @@ def analyse(act, hr_cap=None, cadence=None, band=5, floor=140):
     if not moving:
         return {}
 
-    # Sample spacing, not a sample count: FIT drops to smart recording when
-    # nothing changes, so "1230 records" is not always "1230 seconds".
-    span = [r["timestamp"] for r in act.records if r.get("timestamp")]
+    # Sample spacing, not a sample count: several formats drop to smart
+    # recording when nothing changes, so "1230 records" isn't "1230 seconds".
+    span = [r["t"] for r in act.records if r.get("t") is not None]
     dt = ((max(span) - min(span)) / (len(span) - 1)) if len(span) > 1 else 1.0
 
     hrs = [r.get("heart_rate") for r in moving]
-    cads = [cadence_spm(r, act.running) for r in moving]
+    cads = [r.get("cadence") for r in moving]
     spds = [r.get("speed") for r in moving]
 
     out = {"moving_time_s": round(len(moving) * dt)}
@@ -164,10 +169,10 @@ def analyse(act, hr_cap=None, cadence=None, band=5, floor=140):
 
     # Non-moving stretches before the last moving sample: a break inside the
     # session. A cooldown walk at the end is not a break and isn't counted.
-    last_move = max(r["timestamp"] for r in moving)
+    last_move = max(r["t"] for r in moving)
     gaps, stopped = [], None
     for r, m in mask:
-        t = r["timestamp"]
+        t = r["t"]
         if t > last_move:
             break
         if not m:
@@ -184,10 +189,7 @@ def summary_row(act, derived):
     """The session row itself, in ingest/schema.py's shape and units."""
     s = act.session
     dist_m, spd = s.get("total_distance"), s.get("avg_speed")
-    cad = s.get("avg_cadence")
-    if cad is not None:
-        cad = (cad + (s.get("avg_fractional_cadence") or 0)) * \
-              (2 if act.running else 1)
+    cad = s.get("avg_cadence")   # already in the sport's unit; see activity.py
     row = {
         "datetime": act.start_local.strftime("%Y-%m-%d %H:%M:%S"),
         "date": act.start_local.strftime("%Y-%m-%d"),
@@ -221,7 +223,7 @@ def folder_files(d=None):
     if not os.path.isdir(d):
         return []
     out = [os.path.join(d, f) for f in sorted(os.listdir(d))
-           if f.lower().endswith(READABLE) and not f.startswith(".")]
+           if f.lower().endswith(readable()) and not f.startswith(".")]
     return sorted(out, key=os.path.getmtime)
 
 
@@ -232,7 +234,7 @@ def unreadable_files(d=None):
     if not os.path.isdir(d):
         return []
     return [f for f in sorted(os.listdir(d))
-            if not f.startswith(".") and not f.lower().endswith(READABLE)
+            if not f.startswith(".") and not f.lower().endswith(readable())
             and os.path.isfile(os.path.join(d, f))
             and f.lower() != "readme.md"]
 
@@ -248,13 +250,12 @@ def activity_rows(cfg=None, report=None):
     """
     cfg = cfg or CFG
     opt = settings(cfg)
-    names = (cfg["source"].get("options") or {}).get("fit_sport_names")
     rows = []
     for path in folder_files():
         name = os.path.basename(path)
         try:
-            act = Activity(path, names)
-        except FitError as e:
+            act = activity.read(path, cfg, report)
+        except activity.ActivityError as e:
             if report:
                 report.warn(f"{name}: {e}")
             continue
@@ -274,7 +275,8 @@ def activity_rows(cfg=None, report=None):
                         f"{len(act.records)} records")
     for f in unreadable_files():
         if report:
-            report.warn(f"data/activities/{f}: not a .fit file — not read")
+            report.warn(f"data/activities/{f}: no reader handles that format "
+                        f"(have {', '.join(readable()) or 'none'}) — not read")
     return rows
 
 
@@ -314,7 +316,7 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
                      f"{mmss(tt / (dm / 1000.0)):>6}/km "
                      f"{str(lp.get('avg_hr') or '-'):>4}/"
                      f"{str(lp.get('max_hr') or '-'):<4} "
-                     f"{round(c * 2) if c and act.running else (c or '-'):>5}")
+                     f"{round(c) if c else '-':>5}")
 
     L.append("\nWhile moving" + (f" (cadence >= {n(floor)} spm)" if act.is_run else ""))
     L.append(f"  time {mmss(d.get('moving_time_s'))} of {mmss(row['duration_s'])}"
@@ -429,10 +431,9 @@ def resolve(arg, want_all):
 def analyse_one(path, a, cfg):
     import build   # local: build.py imports this module, so keep it one-way
 
-    names = (cfg["source"].get("options") or {}).get("fit_sport_names")
     try:
-        act = Activity(path, names)
-    except FitError as e:
+        act = activity.read(path, cfg)
+    except activity.ActivityError as e:
         print(f"Cannot read it: {e}")
         return 1
 
@@ -518,12 +519,13 @@ def main(argv=None):
     paths = resolve(a.path, a.all)
     if not paths:
         os.makedirs(ACTIVITIES, exist_ok=True)
-        print(f"Nothing to analyse. Put activity files (.fit) in "
+        print(f"Nothing to analyse. Put activity files "
+              f"({', '.join(readable()) or 'no readers installed'}) in "
               f"{os.path.relpath(ACTIVITIES, ROOT)}/ and run this again —\n"
               f"or just press Rebuild in the dashboard, which reads the same "
               f"folder.")
         for f in unreadable_files():
-            print(f"  ! {f} is there but isn't a .fit file")
+            print(f"  ! {f} is there, but no reader handles that format")
         return 1
 
     rc = 0

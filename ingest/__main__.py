@@ -4,6 +4,8 @@
     python3 -m ingest             which adapters exist, which one is active
     python3 -m ingest --check     run the active one over data/raw/ and report
     python3 -m ingest --check -a strava     ...using a specific adapter
+    python3 -m ingest --readers   single-session readers and the extensions
+                                  they claim (the data/activities/ path)
 
 --check writes nothing. It is the loop to work in while getting an adapter
 right: it prints the ingest report, then how many records carried each field
@@ -42,6 +44,30 @@ def list_adapters(cfg):
               f"{meta['description'] or '—'}{flag}")
     print(f"\n* = active (config.source.adapter). Set it in config.json:\n"
           f'    "source": {{ "adapter": "{active}" }}')
+
+
+def list_readers():
+    """The other ingestion path: one file, one session, sampled per second.
+    Readers are picked by extension rather than named in config, so there is
+    no active one to mark — every listed extension simply works."""
+    from ingest import activity
+
+    have = activity.available()
+    print(f"activity contract v{activity.CONTRACT}   drop dir: "
+          f"data/activities/\n")
+    if not have:
+        print("No readers found in ingest/readers/.")
+        return
+    w = max(len(n) for n in have)
+    for name, meta in sorted(have.items()):
+        ver = meta["contract"]
+        flag = "" if ver in (None, activity.CONTRACT) else f"  [written for v{ver}]"
+        exts = " ".join(meta["extensions"]) or "— claims no extension"
+        print(f"   {name:<{w}}  {meta['origin']:<7}  {exts:<10}  "
+              f"{meta['description'] or '—'}{flag}")
+    print("\nChosen by file extension — nothing to set in config.json.\n"
+          "Write another: cp ingest/readers/_template.py "
+          "ingest/readers/local/<fmt>.py")
 
 
 def coverage(records, fields, label):
@@ -111,6 +137,9 @@ def main(argv):
         name = argv[argv.index("-a") + 1]
     elif "--adapter" in argv:
         name = argv[argv.index("--adapter") + 1]
+    if "--readers" in argv:
+        list_readers()
+        return 0
     if "--check" in argv:
         return check(cfg, name)
     list_adapters(cfg)

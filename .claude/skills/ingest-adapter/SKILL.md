@@ -1,21 +1,35 @@
 ---
 name: ingest-adapter
-description: Make this repo read the user's fitness export — Strava, Polar, Coros, Whoop, Suunto, Apple Health, Intervals.icu, a hand-rolled CSV. Use when build.py reports skipped rows or empty columns, when the dashboard is missing a number, or when the user says their export isn't Garmin's. Covers both the config-only path and writing an adapter in ingest/adapters/local/.
+description: Make this repo read the user's fitness data — Strava, Polar, Coros, Whoop, Suunto, Apple Health, Intervals.icu, a hand-rolled CSV, or a single-activity file (.fit, .tcx, .gpx). Use when build.py reports skipped rows or empty columns, when the dashboard is missing a number, when the user says their export isn't Garmin's, or when a file dropped in data/activities/ wasn't read. Covers the config-only path, writing a bulk adapter in ingest/adapters/local/, and writing a single-session reader in ingest/readers/local/.
 ---
 
-# Making this repo read someone else's export
+# Making this repo read someone else's data
 
-Everyone drops exports in the same folder: `data/raw/`. What changes per data
-source is the **adapter** that reads them — one Python file behind a fixed
-contract. Everything downstream (TRIMP, ACWR, the CSVs, `context.md`, the
-dashboard, the coach) reads only normalized records and must not be touched.
+There are **two ingestion paths**, and picking the right one is the first
+decision. Both end in normalized records, and everything downstream (TRIMP,
+ACWR, the CSVs, `context.md`, the dashboard, the coach) reads only those.
 
-**Never edit `build.py`, `serve.py`, `index.html` or `config.py` for this.** If
-a data-source problem seems to need a change there, the boundary is wrong —
-say so instead of crossing it. The one exception is `config.json`, which is the
-user's own untracked file.
+| | Bulk export | Single session |
+|---|---|---|
+| Folder | `data/raw/` | `data/activities/` |
+| Shape | Weeks of workouts + sleep + HRV, one row per session | One file, one workout, sampled per second |
+| Code | `ingest/adapters/` | `ingest/readers/` |
+| Contract | `ingest/schema.py` | `ingest/activity.py` |
+| Chosen by | `config.source.adapter` | **file extension** — no config |
+| Inspect | `python3 -m ingest` | `python3 -m ingest --readers` |
 
-## Work in this order
+Ask which problem you actually have. "My weekly export doesn't load" is an
+adapter. "I dropped a `.tcx` in `data/activities/` and nothing happened" is a
+reader. A user who wants per-second detail — HR inside a session, cadence
+excluding walk breaks — needs a reader, and no amount of adapter work gets it,
+because a bulk export only ever carries one average per session.
+
+**Never edit `build.py`, `serve.py`, `index.html` or `config.py` for either.**
+If a data-source problem seems to need a change there, the boundary is wrong —
+say so instead of crossing it. The one exception is `config.json`, the user's
+own untracked file.
+
+## Path A — a bulk export (`data/raw/`)
 
 ### 1. Look at the actual file before deciding anything
 
@@ -44,78 +58,108 @@ the timestamp format to `datetime_formats`, and adjust `files` (filename
 substrings), `distance_unit`, `duration_formats` and `missing` as needed. The
 full key list with comments is in `config.py`'s `DEFAULTS["source"]`.
 
-Then:
-
 ```sh
 python3 -m ingest --check
 ```
 
-This runs ingestion only — it writes nothing. It prints the ingest report, then
-how many records carried each field. **Read the coverage table**: a field at
-`0/120` is a mapping that didn't land. Iterate here until it looks right.
+Runs ingestion only — writes nothing. Prints the ingest report, then how many
+records carried each field. **Read the coverage table**: a field at `0/120` is
+a mapping that didn't land. Iterate here until it looks right.
 
 ### 3. Write an adapter when the shape differs
 
-Config can't fix: one row per lap, JSON/TCX/SQLite, several files per period,
-sleep stages that need summing, a distance column carrying its own unit,
-per-vendor activity-type quirks.
+Config can't fix: one row per lap, JSON/SQLite, several files per period, sleep
+stages that need summing, a distance column carrying its own unit, per-vendor
+activity-type quirks.
 
 ```sh
 cp ingest/adapters/_template.py ingest/adapters/local/<source>.py
+# then in config.json:  "source": { "adapter": "<source>" }
 ```
-
-`ingest/adapters/local/` is the user's folder — upstream never writes there, so
-their adapter survives every `git pull`. Name it after the source
-(`strava.py`, `polar.py`). Then set in `config.json`:
-
-```json
-"source": { "adapter": "<source>" }
-```
-
-If a shipped adapter is *nearly* right, copy it to `local/` under **the same
-name** — a local file shadows the shipped one, so the user gets to bend it
-without editing a tracked file and without losing upstream's copy.
 
 Read `ingest/README.md` for the contract and `ingest/schema.py` for the field
 list. Use `ingest/parsers.py` rather than re-solving decimal commas and
-duration notations; read it before writing your own parsing.
+duration notations.
 
-### 4. Verify, then write through
+## Path B — a single activity file (`data/activities/`)
+
+### 1. Check whether a reader already claims that extension
 
 ```sh
-python3 -m ingest --check     # coverage table + most-complete sample record
-python3 build.py              # writes data/*.csv and context.md
+python3 -m ingest --readers
+ls data/activities/
 ```
 
-Sanity-check the sample record against the raw file with your own eyes: a
-5 km run must not come out as 5000, a 45-minute session must be
-`duration_s: 2700`, not 45.
+`.fit` ships. If the user's file is `.fit` and still didn't read, it's a bug in
+the reader or a genuinely odd file — decode it and look before assuming.
 
-## The five things that actually go wrong
+### 2. Write a reader
+
+```sh
+cp ingest/readers/_template.py ingest/readers/local/<format>.py
+```
+
+Declare `EXTENSIONS = (".tcx",)` and that's the wiring — there is **nothing to
+set in config**. Return an `Activity` with `session`, `laps` and `records`; the
+field list with units is in `ingest/activity.py`. Only `t` (seconds from the
+session start) is required on a record; omit anything the format doesn't carry.
+
+```sh
+python3 analyze.py <file> --dry-run      # runs it, writes nothing
+```
+
+`_template.py` raises deliberately, so replace that line. Prefer the standard
+library: this repo has one dependency and adding a parsing package for one
+format is a real cost — XML formats like `.tcx` and `.gpx` are
+`xml.etree.ElementTree`.
+
+## The things that actually go wrong
+
+Shared by both paths:
 
 1. **Units.** `duration_s` seconds, `sleep_min` minutes, `pace_s_per_km`
-   seconds, `distance_km` in `config.source.distance_unit`. A unit error yields
-   plausible numbers that are wrong — the worst failure this system has. Check
-   every numeric field against the raw cell once.
+   seconds, record `t` seconds, `distance_km` in `config.source.distance_unit`,
+   and in a reader: metres, m/s, mm, ms. A unit error yields plausible numbers
+   that are wrong — the worst failure this system has. Check every numeric
+   field against the raw file once, by eye. A 5 km run must not come out as
+   5000; a 45-minute session is `duration_s: 2700`, not 45.
 2. **`avg_hr` missing.** No average heart rate means no TRIMP, which means no
    load, which means an empty dashboard. If the source doesn't export it, say
-   that plainly to the user — it's a real limitation of their data, not
-   something to paper over.
-3. **Unstable `datetime`.** It is half the dedupe key. If it shifts between
-   exports (timezone re-rendered, seconds dropped), every re-export duplicates
-   every workout. Emit `YYYY-MM-DD HH:MM:SS` local time, always.
-4. **Silent skips.** Use `report.skipped()` and `report.missing_columns()`.
-   A row dropped without a line of output becomes a bug report three weeks
-   later that reads "the chart looks wrong".
+   that plainly — it's a real limitation of their data, not something to paper
+   over.
+3. **Unstable or non-local timestamps.** `datetime` (adapter) and
+   `start_local` (reader) are half the dedupe key into `data/sessions.csv`, and
+   must be local wall clock, `YYYY-MM-DD HH:MM:SS`. A reader emitting UTC
+   creates a *second* session for a workout the CSV already supplied, silently
+   doubling that day's TRIMP. `build.py` prints both rows when it notices, but
+   not writing the bug is better. Read the offset out of the file, never from
+   the machine's timezone.
+4. **Silent skips.** Use `report.skipped()` and `report.missing_columns()`. A
+   row dropped without a line of output becomes a bug report three weeks later
+   reading "the chart looks wrong".
 5. **Activity types.** Keep the source's own vocabulary ('Ride', not
-   'Cycling'). Config matches types by substring, so afterwards check whether
+   'Cycling'), and match what the user's *other* path already produces — a
+   reader saying "Run" where the CSV says "Running" is a duplicated session.
+   Config matches types by substring, so afterwards check whether
    `config.mechanical.weights`, `config.primary.match` and
-   `config.plan.kinds[*].match` still name types that exist in this data — and
-   update them if not.
+   `config.plan.kinds[*].match` still name types that exist in this data.
+
+Reader-specific:
+
+6. **Cadence units.** Several formats store a runner's 170 spm as 85
+   revolutions. Double it **in the reader**, so nothing downstream has to know
+   which sport it's looking at. A session reading 85 looks like a form collapse
+   rather than a bug.
 
 ## Finishing
 
-Tell the user which route you took (config vs. adapter), what didn't map and
-why, and any config keys they should now revisit. If you wrote an adapter that
-works, mention they can PR it into `ingest/adapters/` so the next person with
-that device gets it for free.
+```sh
+python3 -m ingest --check     # bulk path: coverage + sample record
+python3 analyze.py --dry-run  # single-session path
+python3 build.py              # write it through
+```
+
+Tell the user which route you took (config, adapter, or reader), what didn't
+map and why, and any config keys they should now revisit. If you wrote
+something that works, mention they can PR it into `ingest/adapters/` or
+`ingest/readers/` so the next person with that device gets it for free.
