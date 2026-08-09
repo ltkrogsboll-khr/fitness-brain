@@ -62,6 +62,14 @@
     "rationale": "<p>Expect it to look worse for 2–3 weeks while cadence rewires; that cost is known and priced in.</p>"
   },
 
+  "_analysis_comment": "What the current plan asked of a single session, measured against the .fit file in data/activities/. Update these when the plan changes; override per run with `python3 analyze.py run.fit --hr-cap 145`. walk_cadence_floor is what separates running from walking — the whole reason to read the file rather than the CSV average.",
+  "analysis": {
+    "hr_cap": 140,
+    "cadence_target": 170,
+    "cadence_band": 5,
+    "walk_cadence_floor": 140
+  },
+
   "readiness": {
     "sleep_score_warn": 70,
     "sleep_debt_h": 2.0,

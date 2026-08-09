@@ -109,6 +109,26 @@ DEFAULTS = {
         "rationale": "",
     },
 
+    # Close analysis of a single activity from its .fit file (analyze.py).
+    # These are what the *current plan* asked of a session, so they change when
+    # the plan does -- every one is overridable per run on the command line.
+    "analysis": {
+        # HR ceiling the session was prescribed. null disables the measure
+        # rather than inventing one; `--hr-cap 140` sets it for one run.
+        "hr_cap": None,
+        # Cadence target. Falls back to form_metric.target when null.
+        "cadence_target": None,
+        "cadence_band": 5,          # +/- spm still counted as on target
+        # Below this you are walking, not running, and the samples are excluded
+        # from the moving averages. This is the whole point of reading the file:
+        # a walk home drags a session average somewhere you never actually were.
+        # Walking runs 100-120 spm and running 150+, so the boundary sits at
+        # 140 -- put it at 100 and a cooldown walk reads as running.
+        # Applies to runs only; other sports use "was I moving at all".
+        "walk_cadence_floor": 140,
+        "journal": True,            # also append a line to journal.md
+    },
+
     "readiness": {
         "sleep_score_warn": 70,
         "sleep_debt_h": 2.0,

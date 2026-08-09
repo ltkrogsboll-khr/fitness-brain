@@ -55,8 +55,10 @@ Run it whenever you plan — every Sunday, every ten days, or whenever the last
 block ran out. Nothing schedules this for you.
 
 1. Export from your data source (e.g. watch, website) into `data/raw/` — activities, sleep, and optionally HRV. Same folder whatever the vendor; see [Using a different export](#using-a-different-export).
-2. `python3 build.py` — ingests, dedupes, derives, writes `context.md`.
-3. Ask the coach for the next block. It reads `policy.md` → `context.md` →
+2. Optionally drop single-activity files (`.fit`) into `data/activities/` — see
+   [One session, close up](#one-session-close-up).
+3. `python3 build.py` — ingests, dedupes, derives, writes `context.md`.
+4. Ask the coach for the next block. It reads `policy.md` → `context.md` →
    `journal.md` and writes `plans/YYYY-MM-DD.md`.
 
 The newest file in `plans/` carries a fenced ` ```cycle ` block, one line per day,
@@ -88,12 +90,77 @@ block rather than a partial week that reads as a sudden collapse in load. The
 dashed chronic line is the 28-day average scaled to one bar's width, so
 bar-against-line is the same comparison at any block length.
 
+## One session, close up
+
+Drop a `.fit` file in `data/activities/` and rebuild. That's it — `build.py`
+reads the folder, so the dashboard's **Rebuild** button is the whole workflow.
+
+The folder is named for what the files are rather than who wrote them: Garmin,
+Wahoo, Coros and Suunto all export `.fit`. Only `.fit` decodes today
+(`ingest/fit.py`, stdlib, no dependency); anything else in the folder gets named
+in the ingest report rather than ignored.
+
+**Why bother, when the CSV already has cadence and stride?** Because a CSV row
+is one average per session, and an average taken over a run that ends in a walk
+home describes neither. A real example — the same 2.8 km run, both numbers true:
+
+| | Session average (CSV) | While actually running (`.fit`) |
+|---|---|---|
+| Cadence | 154 spm | **171 spm**, 99% of it inside 165–175 |
+
+The first says you missed a 170 target by 16. The second says you hit it. The
+difference is a 3½-minute cooldown walk, and only one of those sentences should
+reach a coaching conversation.
+
+What it derives, per session, beyond what any summary row can hold:
+
+| Field | What it answers |
+|---|---|
+| `moving_cadence`, `moving_avg_hr`, `moving_pace_s_per_km` | What you did while doing it, walking excluded |
+| `pct_above_hr_cap` | How much of the session broke the prescribed ceiling |
+| `cadence_in_band_pct` | Adherence to a cadence target, not just its mean |
+| `hr_drift_bpm`, `decoupling_pct` | Whether HR rose because you tired or because you sped up — a distinction a mean destroys |
+| `walk_break_s` | Time stopped inside the session, excluding a cooldown |
+
+Where it goes:
+
+- **Numbers** → extra columns on the session row in `data/sessions.csv`. The
+  ingest schema keeps unknown session fields, so this needs no engine change,
+  and any of them can become `config.form_metric.field` — making
+  `moving_cadence` the tracked number instead of the walk-diluted `cadence`.
+- **Prose** → one line in `journal.md`, which `build.py` folds into `context.md`
+  and `serve.py` injects into every coach conversation. So a dropped file
+  reaches the next planning conversation without anyone typing it. The line
+  names its source file, which is what makes rebuilding idempotent.
+
+The per-second streams are never stored: nothing downstream can consume 1 Hz
+data, and the file is still on disk when a new question needs asking of it.
+
+Targets live in `config.analysis` (`hr_cap`, `cadence_target`, `cadence_band`)
+because they're what the *current plan* asked for — update them when the plan
+changes. For a one-off, `python3 analyze.py` takes the newest file in the folder
+and prints a lap-by-lap report without writing anything:
+
+```sh
+python3 analyze.py --dry-run              # newest activity, print only
+python3 analyze.py run.fit --hr-cap 145   # against a different ceiling
+python3 analyze.py --all                  # backfill the whole folder
+```
+
+**The one thing to watch.** A `.fit` file and a CSV export of the same workout
+must produce the same `(datetime, type)` key or the session lands twice — and
+two sessions means double TRIMP, a wrong number that looks entirely plausible.
+Timestamps are taken from the file's own UTC offset rather than the machine's
+timezone, so this normally just works; when it doesn't, `build.py` prints both
+rows and says so rather than letting the load quietly double.
+
 ## Files
 
 | Path | What it is |
 |---|---|
 | `ingest/` | The only code that knows what your export looks like. Swappable adapters behind a fixed contract — see [Using a different export](#using-a-different-export) |
 | `build.py` | Dedupe → derive → emit, over whatever `ingest/` returns. Stdlib only |
+| `analyze.py` | One activity, second by second, from its `.fit` file |
 | `serve.py` | Local dashboard + chat proxy. Binds 127.0.0.1 only |
 | `index.html` | The whole frontend. No build step, no CDN |
 | `config.py` | Defaults, and the merge that makes `config.json` optional |

@@ -28,6 +28,10 @@ from ingest.parsers import read_csv
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 RAW = os.path.join(ROOT, "data", "raw")
+# Per-activity files (.fit), read at full resolution by analyze.py. Separate
+# from RAW because these are one file per session rather than one export of
+# everything, and because the adapter never sees them.
+ACTIVITIES = os.path.join(ROOT, "data", "activities")
 DAILY = os.path.join(ROOT, "data", "daily.csv")
 SESSIONS = os.path.join(ROOT, "data", "sessions.csv")
 CONTEXT = os.path.join(ROOT, "context.md")
@@ -97,6 +101,35 @@ def upsert(path, rows, key_fields, drop=()):
     return out
 
 
+def near_duplicates(sess, fit_rows, tolerance_s=900):
+    """Sessions that look like the same workout counted twice.
+
+    An activity file and a CSV export describing one run must produce the same
+    (datetime, type) key or they become two sessions, and two sessions means
+    double the TRIMP and double the distance — a wrong number that looks
+    entirely plausible. Timestamps a few minutes apart are the tell: a vendor
+    that logs when you pressed start and a file that logs first GPS fix will
+    disagree by exactly that much. -> [(fit_row, other_row)]
+    """
+    out = []
+    for r in fit_rows:
+        try:
+            t = datetime.fromisoformat(r["datetime"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        for s in sess:
+            if (s.get("date") != r.get("date") or s.get("type") != r.get("type")
+                    or s.get("datetime") == r.get("datetime")):
+                continue
+            try:
+                t2 = datetime.fromisoformat(s["datetime"])
+            except (TypeError, ValueError):
+                continue
+            if abs((t2 - t).total_seconds()) <= tolerance_s:
+                out.append((r, s))
+    return out
+
+
 def fnum(r, k):
     v = r.get(k)
     if v in MISSING:
@@ -111,7 +144,8 @@ def fnum(r, k):
 def main():
     today = date.today()
 
-    # First run after a clone: make the drop-box rather than fail on it.
+    # First run after a clone: make the drop-boxes rather than fail on them.
+    os.makedirs(ACTIVITIES, exist_ok=True)
     if not os.path.isdir(RAW):
         os.makedirs(RAW, exist_ok=True)
         print(f"Created {os.path.relpath(RAW, ROOT)}/ — it was empty.\n"
@@ -125,6 +159,15 @@ def main():
         print(f"Ingest failed: {e}")
         return
     acts, sleep, hrv = got.sessions, got.sleep, got.hrv
+
+    # Activity files carry the same sessions at full resolution, plus the
+    # derived fields the CSV can't express. They join `acts` here so they go
+    # through the same TRIMP and upsert path — a .fit-only session is a real
+    # session, not an annotation on one.
+    import analyze
+    fit_rows = analyze.activity_rows(CFG, rep)
+    acts += [{k: v for k, v in r.items() if k != "_source_file"}
+             for r in fit_rows]
 
     rep.print()
     if acts and not any(a["avg_hr"] for a in acts):
@@ -144,6 +187,20 @@ def main():
         a["mech_km"] = mech_km(a)
 
     sess = upsert(SESSIONS, acts, ["datetime", "type"], drop=LEGACY_COLS)
+
+    for a, b in near_duplicates(sess, fit_rows):
+        print(f"  ! {a['datetime']} {a['type']} (from an activity file) and "
+              f"{b['datetime']} {b['type']} (already in sessions.csv) look "
+              f"like the same workout counted twice.\n"
+              f"    Its load is now doubled. Delete one row from "
+              f"data/sessions.csv, and if this repeats, set "
+              f"config.source.options.fit_sport_names so the types match.")
+
+    # Before write_context, which reads journal.md back in: an activity file
+    # dropped in the folder becomes a sentence the coach reads, with nobody
+    # typing it. Idempotent — the line names its source file and is written once.
+    for line in analyze.journal_for_rows(fit_rows, CFG):
+        print(f"Journal  {line}")
 
     fm = CFG["form_metric"]
 

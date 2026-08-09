@@ -85,6 +85,7 @@ rather than writing junk into the database.
 |---|---|
 | `schema.py` | The record shapes, with units. The contract itself |
 | `parsers.py` | CSV reading, decimal-comma sniffing, five duration notations, timezone-dropping timestamps |
+| `fit.py` | Decoding a `.fit` file — one activity at full resolution, for `analyze.py`. Not part of the adapter path |
 | `report.py` | What ingest tells you it did |
 | `adapters/` | Shipped adapters. Upstream owns these |
 | `adapters/local/` | Yours. Upstream never writes here |
