@@ -6,6 +6,12 @@
     "hr_rest_fallback": 60
   },
 
+  "cycle": {
+    "days": 7,
+    "label": "week",
+    "per": "per week"
+  },
+
   "aerobic": {
     "label": "Aerobic",
     "unit": "TRIMP",
@@ -35,7 +41,7 @@
     "label": "Running",
     "unit": "km",
     "match": ["Running"],
-    "weekly_cap": 30,
+    "cap": 30,
     "cap_note": "current phase cap"
   },
 

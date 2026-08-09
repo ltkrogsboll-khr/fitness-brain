@@ -1,11 +1,11 @@
 # fitness-brain
 
 A training system for HR-based endurance sport that you can actually argue with —
-one you can tell how your body feels this week, and that holds the plan to rules
+one you can tell how your body actually feels, and that holds the plan to rules
 you wrote down instead of improvising a new opinion each session.
 
-Local-only: a Python build step over your watch's CSV exports, a single-file
-dashboard, and a coach chat that reads your policy on every turn.
+Local-only: a Python build step over your CSV exports, a single-file dashboard,
+and a coach chat that reads your policy on every turn.
 
 ## Run it
 
@@ -33,9 +33,10 @@ the page and the policy from quoting different ceilings at you.
 
 | Section | What it controls |
 |---|---|
+| `cycle` | How many days one training block is, and what you call it. See [Cycle length](#cycle-length) |
 | `aerobic` | The TRIMP channel and its ACWR ceiling. Always on |
 | `mechanical` | Optional second channel: per-activity-type weights for whatever tissue adapts slower than your heart. Off by default |
-| `primary` | Which activity types count as headline volume, and any weekly cap |
+| `primary` | Which activity types count as headline volume, and any per-cycle cap |
 | `form_metric` | Any per-session number with a target — cadence, stroke rate, power |
 | `benchmark` | Pace at a fixed HR: the metric that can't be gamed by pushing |
 | `readiness` | Sleep, RHR and HRV thresholds |
@@ -48,22 +49,44 @@ Anything you leave out falls back to a neutral default, so a partial config is
 fine. With no `config.json` at all you get a generic HR-based setup: one load
 channel, no form metric, one soreness field.
 
-## Weekly loop
+## The loop
 
-1. Export from your watch into `data/raw/` — activities, sleep, and optionally HRV.
+Run it whenever you plan — every Sunday, every ten days, or whenever the last
+block ran out. Nothing schedules this for you.
+
+1. Export from your data source (e.g. watch, website) into `data/raw/` — activities, sleep, and optionally HRV.
 2. `python3 build.py` — ingests, dedupes, derives, writes `context.md`.
-3. Ask the coach for the week. It reads `policy.md` → `context.md` → `journal.md`
-   and writes `plans/YYYY-MM-DD.md`.
+3. Ask the coach for the next block. It reads `policy.md` → `context.md` →
+   `journal.md` and writes `plans/YYYY-MM-DD.md`.
 
-The newest file in `plans/` carries a fenced ` ```week ` block, one line per day,
-which drives the dashboard's week strip:
+The newest file in `plans/` carries a fenced ` ```cycle ` block, one line per day,
+which drives the dashboard's day strip:
 
 ```
 2026-08-09 | run | Run 2.5 km | Cadence calibration. Metronome 170. HR ≤140.
 ```
 
-Kinds come from `config.plan.kinds`. Completion is inferred from what actually got
-logged, not ticked by hand.
+The block is read as the list of dates it contains — five days, ten, a fortnight,
+starting on any weekday. Kinds come from `config.plan.kinds`. Completion is
+inferred from what actually got logged, not ticked by hand. (` ```week ` is the
+original fence name and still parses, so old plans keep rendering.)
+
+## Cycle length
+
+`config.cycle.days` is one training block, and it's a display and volume-window
+setting rather than a schedule — the engine never asks what day of the week it is.
+
+| It changes | It doesn't change |
+|---|---|
+| How wide the load-chart bars are, counted back from your newest day of data | **ACWR**, which stays on the standard 7:28-day rolling windows whatever you set |
+| The window `primary.cap` is measured over | Which days you can plan, or how long a plan block may be |
+| The noun the dashboard uses — `label` and `per`, both derived if you leave them blank | Anything in ingest, TRIMP, or the chronic baseline |
+
+Bars are totalled over fixed-width blocks ending on your newest day, not over
+calendar weeks. That drops the Monday start, and it means the last bar is a full
+block rather than a partial week that reads as a sudden collapse in load. The
+dashed chronic line is the 28-day average scaled to one bar's width, so
+bar-against-line is the same comparison at any block length.
 
 ## Files
 

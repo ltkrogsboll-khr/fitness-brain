@@ -187,17 +187,21 @@ def latest_plan_path():
     return f"plans/{ps[-1]}" if ps else None
 
 
-def parse_week(md, by_date):
-    """Pull the ```week block out of a plan file.
+def parse_plan_days(md, by_date):
+    """Pull the ```cycle block out of a plan file.
 
     Line format:  YYYY-MM-DD | kind | title | detail
-    `done` is inferred from what actually got logged that day, so the strip
-    ticks itself off as new data lands -- nothing to check by hand.
+    Any number of days, any start weekday -- the block is read as the list of
+    dates it actually contains, not as a week. `done` is inferred from what
+    actually got logged that day, so the strip ticks itself off as new data
+    lands -- nothing to check by hand.
     """
     out, inside = [], False
     for line in md.splitlines():
         s = line.strip()
-        if s.startswith("```week"):
+        # ```week is the original fence name; plans written against it still
+        # render, so nothing in plans/ needed rewriting when this generalised.
+        if s.startswith("```cycle") or s.startswith("```week"):
             inside = True
             continue
         if inside and s.startswith("```"):
@@ -250,35 +254,52 @@ def fl(r, k):
         return None
 
 
-def iso_week(d):
-    y, w, _ = dt.date.fromisoformat(d).isocalendar()
-    return f"{y}-W{w:02d}"
+def cycle_bars(daily, days, keep=26):
+    """Total each load channel over fixed-width blocks, newest block first.
+
+    Calendar weeks were the obvious bucketing and the wrong one. They impose a
+    Monday start on anyone whose block isn't seven days long, and the current
+    bucket is a partial week that reads as a crash in load. Counting backwards
+    from the newest day of data instead means the last bar is always a full
+    block ending today, and every bar is directly comparable to the chronic
+    reference line the chart draws over it.
+    """
+    dated = sorted((r for r in daily if r.get("date")), key=lambda r: r["date"])
+    if not dated:
+        return []
+    end = dt.date.fromisoformat(dated[-1]["date"])
+    blocks = {}
+    for r in dated:
+        # 0 is the block ending on the newest day, 1 the one before it.
+        i = (end - dt.date.fromisoformat(r["date"])).days // days
+        e = blocks.get(i)
+        if e is None:
+            lo = end - dt.timedelta(days=days * i + days - 1)
+            hi = end - dt.timedelta(days=days * i)
+            e = blocks[i] = {"start": lo.isoformat(), "end": hi.isoformat(),
+                             "label": f"{lo.isoformat()} → {hi.isoformat()}",
+                             "primary_km": 0.0, "mech_km": 0.0, "trimp": 0.0}
+        e["primary_km"] += fl(r, "primary_km") or 0.0
+        # Weighted km -- the same unit the chronic average and ACWR are in, so
+        # the chart can compare a bar to its reference line directly.
+        e["mech_km"] += fl(r, "mech_km") or 0.0
+        e["trimp"] += fl(r, "trimp") or 0.0
+    out = [blocks[i] for i in sorted(blocks, reverse=True)][-keep:]
+    for b in out:
+        b["primary_km"] = round(b["primary_km"], 1)
+        b["mech_km"] = round(b["mech_km"], 1)
+        b["trimp"] = round(b["trimp"], 0)
+    return out
 
 
 def build_payload():
     daily = rows("data/daily.csv")
     sess = rows("data/sessions.csv")
     fm = CFG["form_metric"]
+    cyc = CFG["cycle"]["days"]
 
-    # Weekly aggregates -- the load channels, kept as separate charts
-    weeks = {}
-    for r in daily:
-        if not r.get("date"):
-            continue
-        k = iso_week(r["date"])
-        e = weeks.setdefault(k, {"week": k, "primary_km": 0.0, "mech_km": 0.0,
-                                 "trimp": 0.0, "start": r["date"]})
-        e["primary_km"] += fl(r, "primary_km") or 0.0
-        # Weighted km -- the same unit the chronic average and ACWR are in, so
-        # the chart can compare a bar to its reference line directly.
-        e["mech_km"] += fl(r, "mech_km") or 0.0
-        e["trimp"] += fl(r, "trimp") or 0.0
-        e["start"] = min(e["start"], r["date"])
-    weekly = sorted(weeks.values(), key=lambda x: x["start"])[-26:]
-    for w in weekly:
-        w["primary_km"] = round(w["primary_km"], 1)
-        w["mech_km"] = round(w["mech_km"], 1)
-        w["trimp"] = round(w["trimp"], 0)
+    # Per-cycle aggregates -- the load channels, kept as separate charts
+    bars = cycle_bars(daily, cyc)
 
     match = CFG["primary"]["match"]
     prim = [r for r in sess
@@ -309,10 +330,15 @@ def build_payload():
     def wsum(rs, k):
         return round(sum(fl(r, k) or 0.0 for r in rs), 1)
 
-    a7 = dated[-7:]
-    c28 = dated[-28:]
+    # ACWR keeps its standard 7:28-day definition whatever the cycle length is
+    # -- the ceilings you'd read anywhere else are quoted against those windows.
+    a7, c28 = dated[-7:], dated[-28:]
     ac_im, ch_im = wsum(a7, "mech_km"), round(wsum(c28, "mech_km") / 4, 2)
     ac_tr, ch_tr = wsum(a7, "trimp"), round(wsum(c28, "trimp") / 4, 1)
+    # The chart's dashed line is that same chronic rate stretched to the width
+    # of one bar, so bar-against-line stays readable at any cycle length.
+    ref_im = round(wsum(c28, "mech_km") / 28 * cyc, 2)
+    ref_tr = round(wsum(c28, "trimp") / 28 * cyc, 1)
 
     journal = [l for l in read("journal.md").splitlines() if l.startswith("20")]
 
@@ -328,8 +354,8 @@ def build_payload():
         "today": dt.date.today().isoformat(),
         "config": CFG,
         "plan_name": os.path.basename(pp) if pp else None,
-        "week": parse_week(plan_md, by_date),
-        "weekly": weekly,
+        "plan_days": parse_plan_days(plan_md, by_date),
+        "bars": bars,
         "primary_sessions": primary_sessions,
         "last14": [
             {
@@ -341,9 +367,10 @@ def build_payload():
             } for r in last14
         ],
         "stats": {
-            "mech_acute": ac_im, "mech_chronic": ch_im,
+            "mech_acute": ac_im, "mech_chronic": ch_im, "mech_ref": ref_im,
             "mech_acwr": round(ac_im / ch_im, 2) if ch_im else None,
             "aerobic_acute": ac_tr, "aerobic_chronic": ch_tr,
+            "aerobic_ref": ref_tr,
             "aerobic_acwr": round(ac_tr / ch_tr, 2) if ch_tr else None,
             "hrv_night": fl(last_hrv, "hrv_night"),
             "hrv_lo": fl(last_hrv, "hrv_base_lo"),
@@ -351,7 +378,7 @@ def build_payload():
             "rhr": fl(last_sleep, "rhr"),
             "sleep_score": fl(last_sleep, "sleep_score"),
             "sleep_date": last_sleep.get("date"),
-            "primary_km_7d": wsum(a7, "primary_km"),
+            "primary_km_cycle": wsum(dated[-cyc:], "primary_km"),
         },
         "journal": journal[-40:],
         "context_md": read("context.md"),

@@ -212,15 +212,16 @@ as a session.
 
 ## 11. Review cadence
 
-Weekly, normally Sunday:
+Once per cycle — for this policy that's weekly, normally Sunday. Set your own
+cadence here and `cycle.days` in `config.json` to match:
 
 1. Export CSVs → `data/raw/` → `python3 build.py`
 2. Claude interviews, appends to `journal.md`
 3. Claude reads `policy.md` + `context.md` + `journal.md` → writes `plans/YYYY-MM-DD.md`
 
-   **Every plan must contain a ```week block** — the dashboard reads it to render
+   **Every plan must contain a ```cycle block** — the dashboard reads it to render
    the day strip, and it is the single source of truth for the schedule. One line
-   per day, seven days:
+   per day, for as many days as the cycle covers:
 
    ```
    YYYY-MM-DD | run|cross|strength|rest | Short title | Detail sentence

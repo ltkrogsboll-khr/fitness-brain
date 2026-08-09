@@ -87,7 +87,8 @@ details.dis .body{padding:2px 14px 14px}
   color:var(--muted);font-weight:700}
 .today .what{font-size:20px;font-weight:600;letter-spacing:-.015em;margin:2px 0 3px}
 .today .how{color:var(--ink2);font-size:13.5px}
-.strip{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+/* auto-fit, not repeat(7): a plan block is however many days it says it is. */
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:8px}
 @media(max-width:820px){.strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
 /* The strip is a picker: a card carries only its name and title, and clicking
    it swaps the detail into the single card above. */
@@ -214,8 +215,8 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 <h2>Plan <span class="sub" id="planname"></span></h2>
 <div id="todaycard"></div>
 
-<details class="dis" id="d-week" open>
-  <summary>Rest of the week <span class="cnt" id="weekcnt"></span></summary>
+<details class="dis" id="d-plan" open>
+  <summary><span id="planrest">Rest of the plan</span> <span class="cnt" id="plancnt"></span></summary>
   <div class="body"><div class="strip" id="strip"></div></div>
 </details>
 
@@ -261,6 +262,9 @@ const fmt = (v, d=1) => v==null ? '–' : (+v).toFixed(d);
 const paceStr = s => s==null ? '–' : `${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
 // Whatever config.source.distance_unit says the exports are in — km or mi.
 const DU = () => C?.source?.distance_unit || 'km';
+// One training block: its length in days, and the noun to call it in prose.
+const CYC = () => C?.cycle?.days || 7;
+const CYCN = () => C?.cycle?.label || 'cycle';
 
 function showTip(e, text){
   tip.textContent = text; tip.style.opacity = 1;
@@ -282,17 +286,19 @@ function buildHelp(c){
   const weights = Object.entries(c.mechanical.weights)
     .map(([k,v]) => `${k.toLowerCase()} ${v}`).join(' · ');
   return {
-    mech: `<h5>${c.mechanical.label} load per week</h5>
-      <p>Bars are <b>${c.mechanical.unit}</b> per calendar week — every ${DU()} scaled by
+    mech: `<h5>${c.mechanical.label} load ${c.cycle.per}</h5>
+      <p>Bars are <b>${c.mechanical.unit}</b> per ${CYC()}-day block counted back from
+      your newest day of data — every ${DU()} scaled by
       how much it costs the tissue you're protecting${weights ? `: ${weights}, and
       everything else 0.0` : ''}. The dashed line is the <b>chronic average</b>, the
-      same figure over the last 28 days divided by four: a rolling picture of what
-      you are currently used to.</p>
+      same figure over the last 28 days scaled to one bar's width: a rolling picture
+      of what you are currently used to.</p>
       ${c.mechanical.rationale}
       <p>Read each bar against the line. Bar ÷ line is the <b>ACWR</b> (acute:chronic
       workload ratio); above <b>${c.mechanical.acwr_ceiling}</b> you asked for more
-      than the past month prepared you for.</p>`,
-    aerobic: `<h5>${c.aerobic.label} load per week</h5>
+      than the past month prepared you for. The tile up top computes it on the
+      standard 7-day acute window whatever your block length is.</p>`,
+    aerobic: `<h5>${c.aerobic.label} load ${c.cycle.per}</h5>
       <p><b>TRIMP</b> — training impulse — is one currency for cardiovascular work
       across every activity. Banister's formula: minutes × how far your heart rate sat
       into its reserve, weighted exponentially. So 40 min at HR 150 scores far more
@@ -307,7 +313,7 @@ function buildHelp(c){
       ${c.form_metric.rationale}`,
     pace: `<h5>Pace against heart rate</h5>
       <p>One dot per session: average heart rate across the bottom, average pace up
-      the side, faster higher. Dark dots are the last 8 weeks, grey ones earlier.</p>
+      the side, faster higher. Dark dots are the last 56 days, grey ones earlier.</p>
       <p>Pace on its own only tells you how hard you tried. Pace <i>at a fixed heart
       rate</i> tells you how fit you are — it's aerobic efficiency, and it can't be
       gamed by pushing, because going harder moves a dot to the right rather than
@@ -411,7 +417,7 @@ function niceTicks(min, max, n=4){
   return out;
 }
 
-// --- weekly bars -------------------------------------------------------------
+// --- per-cycle load bars ------------------------------------------------------
 function barChart(mount, data, key, unit, refVal, refLabel){
   const w=520,h=190, f=frame(w,h,{t:14,r:12,b:26,l:38});
   const vals = data.map(d=>d[key]);
@@ -424,7 +430,7 @@ function barChart(mount, data, key, unit, refVal, refLabel){
     const r = el('rect',{x, y, width:bwid, height:hgt, rx:Math.min(4,bwid/2),
       fill:'var(--ink2)'});
     r.addEventListener('mousemove', e =>
-      showTip(e, `${d.week}\n${fmt(d[key], key==='trimp'?0:1)} ${unit}${
+      showTip(e, `${d.label}\n${fmt(d[key], key==='trimp'?0:1)} ${unit}${
         key==='mech_km' && d.primary_km!=null
           ? `\n${fmt(d.primary_km,1)} ${C.primary.unit} ${C.primary.label.toLowerCase()}` : ''}`));
     r.addEventListener('mouseleave', hideTip);
@@ -574,11 +580,11 @@ function checks(){
                    : `${mech.label} load is nearing the ceiling`,
       why:lvl===2
         ? `ACWR ${fmt(s.mech_acwr,2)} against a ${ceil} limit — ${fmt(s.mech_acute,1)}
-           ${mech.unit} this week versus a ${fmt(s.mech_chronic,1)} chronic average.`
+           ${mech.unit} in the last 7 days versus a ${fmt(s.mech_chronic,1)} chronic average.`
         : `ACWR ${fmt(s.mech_acwr,2)} — inside the ${ceil} limit but past
-           ${fmt(mech.warn_ratio,2)}, on ${fmt(s.mech_acute,1)} ${mech.unit} this week against a
-           ${fmt(s.mech_chronic,1)} chronic average. Train the week as written rather than
-           adding to it.`
+           ${fmt(mech.warn_ratio,2)}, on ${fmt(s.mech_acute,1)} ${mech.unit} in the last 7 days
+           against a ${fmt(s.mech_chronic,1)} chronic average. Train the ${CYCN()} as written
+           rather than adding to it.`
     });
   }
 
@@ -593,15 +599,15 @@ function checks(){
          ${aer.unit} versus a ${fmt(s.aerobic_chronic,0)} chronic average.`
   });
 
-  if(prim.enabled && prim.weekly_cap){
+  if(prim.enabled && prim.cap){
     out.push({
-      lvl: s.primary_km_7d==null ? null : s.primary_km_7d>prim.weekly_cap ? 1 : 0,
-      label:`${prim.label}, 7d`, long:`${prim.label}, 7 days`,
-      val:`${fmt(s.primary_km_7d,1)} ${prim.unit}`,
-      note:prim.cap_note || `cap: ${prim.weekly_cap} ${prim.unit}`,
-      head:`Weekly ${prim.label.toLowerCase()} is over the cap`,
-      why:`${fmt(s.primary_km_7d,1)} ${prim.unit} in the last 7 days against the
-           ${prim.weekly_cap} ${prim.unit} cap. The cap is on volume alone — it holds even
+      lvl: s.primary_km_cycle==null ? null : s.primary_km_cycle>prim.cap ? 1 : 0,
+      label:`${prim.label}, ${CYC()}d`, long:`${prim.label}, ${CYC()} days`,
+      val:`${fmt(s.primary_km_cycle,1)} ${prim.unit}`,
+      note:prim.cap_note || `cap: ${prim.cap} ${prim.unit}`,
+      head:`${prim.label} volume is over the cap`,
+      why:`${fmt(s.primary_km_cycle,1)} ${prim.unit} in the last ${CYC()} days against the
+           ${prim.cap} ${prim.unit} cap. The cap is on volume alone — it holds even
            when the ACWR looks calm.`
     });
   }
@@ -700,12 +706,15 @@ function renderStatus(a){
    next session if today isn't in the plan) — the state you land on. */
 let picked = null;
 
-function renderWeek(){
-  const wk = D.week || [];
+function renderPlan(){
+  /* The plan is whatever dated lines the block holds — five days, ten, a
+     fortnight. Nothing here counts to seven. */
+  const wk = D.plan_days || [];
   $('#planname').textContent = D.plan_name ? `· ${D.plan_name.replace('.md','')}` : '';
+  $('#planrest').textContent = `Rest of the ${CYCN()}`;
   if(!wk.length){
-    $('#todaycard').innerHTML = '<div class="card">No plan found. Add a <code>```week</code> block to the newest file in <code>plans/</code>.</div>';
-    $('#strip').innerHTML=''; $('#weekcnt').textContent=''; return;
+    $('#todaycard').innerHTML = '<div class="card">No plan found. Add a <code>```cycle</code> block to the newest file in <code>plans/</code>.</div>';
+    $('#strip').innerHTML=''; $('#plancnt').textContent=''; return;
   }
   const t = D.today;
   const todayRow = wk.find(d => d.date === t);
@@ -737,12 +746,12 @@ function renderWeek(){
       </div>
     </div>`;
   const back = $('#backtoday');
-  if(back) back.onclick = () => { picked = null; renderWeek(); };
+  if(back) back.onclick = () => { picked = null; renderPlan(); };
 
   const sessions = wk.filter(d => !isRest(d.kind));
   const doneN = sessions.filter(d => d.done).length;
   const left = wk.filter(d => d.date > t && !isRest(d.kind)).length;
-  $('#weekcnt').textContent =
+  $('#plancnt').textContent =
     `${doneN}/${sessions.length} sessions logged · ${left} still ahead`;
 
   $('#strip').innerHTML = wk.map(d=>{
@@ -767,15 +776,15 @@ function renderCharts(){
   const cards = [];
   if(C.mechanical.enabled) cards.push({
     id:'mech', help:'mech',
-    title:`${C.mechanical.label} load per week (${C.mechanical.unit})`,
-    sub:`Dashed line = 28-day chronic average.`,
-    draw:m => barChart(m, D.weekly, 'mech_km', C.mechanical.unit, s.mech_chronic, 'chronic avg')
+    title:`${C.mechanical.label} load ${C.cycle.per} (${C.mechanical.unit})`,
+    sub:`Dashed line = 28-day chronic average, scaled to ${CYC()} days.`,
+    draw:m => barChart(m, D.bars, 'mech_km', C.mechanical.unit, s.mech_ref, 'chronic avg')
   });
   cards.push({
     id:'aerobic', help:'aerobic',
-    title:`${C.aerobic.label} load per week (${C.aerobic.unit})`,
+    title:`${C.aerobic.label} load ${C.cycle.per} (${C.aerobic.unit})`,
     sub:'One currency for cardiovascular work across every activity.',
-    draw:m => barChart(m, D.weekly, 'trimp', C.aerobic.unit, s.aerobic_chronic, 'chronic avg')
+    draw:m => barChart(m, D.bars, 'trimp', C.aerobic.unit, s.aerobic_ref, 'chronic avg')
   });
   if(C.form_metric.enabled && D.primary_sessions.some(r=>r.form)) cards.push({
     id:'form', help:'form',
@@ -798,7 +807,7 @@ function renderCharts(){
         <button class="info" data-help="${c.help}" aria-label="What is this chart?">?</button></div>
       ${c.sub ? `<div class="csub">${c.sub}</div>` : ''}
       ${c.legend ? `<div class="legend">
-          <span><i class="sw" style="background:var(--ink)"></i>Last 8 weeks</span>
+          <span><i class="sw" style="background:var(--ink)"></i>Last 56 days</span>
           <span><i class="sw" style="background:var(--axis)"></i>Earlier</span>
         </div>` : ''}
       <div id="c-${c.id}"></div>
@@ -840,7 +849,7 @@ function render(){
 
   const a = assess();
   renderStatus(a);
-  renderWeek();
+  renderPlan();
   renderCharts();
   renderJournalInput();
 
@@ -889,7 +898,7 @@ $('#rebuild').onclick = async e => {
 $('#strip').addEventListener('click', e => {
   const b = e.target.closest('.day'); if(!b) return;
   picked = (picked === b.dataset.date) ? null : b.dataset.date;
-  renderWeek();
+  renderPlan();
 });
 
 // Disclosure state survives a reload — whichever sections you keep open are the

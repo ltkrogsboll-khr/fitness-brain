@@ -37,6 +37,19 @@ DEFAULTS = {
         "hr_rest_fallback": 55,
     },
 
+    # One training block. Seven days is the common case, not a requirement:
+    # this sets how the load charts bucket their bars, the window the primary
+    # cap is measured over, and the noun the dashboard uses in prose. ACWR is
+    # left on its standard 7:28-day definition whatever you put here.
+    "cycle": {
+        "days": 7,
+        # Both blank derive themselves: "week" / "per week" at seven days,
+        # "cycle" / "per N days" otherwise. Set them to call it a microcycle,
+        # a block, a training week — whatever you actually say out loud.
+        "label": "",
+        "per": "",
+    },
+
     # Channel 1: cardiovascular work, in TRIMP. Applies to any activity with a
     # heart rate, so it is always on.
     "aerobic": {
@@ -66,6 +79,9 @@ DEFAULTS = {
         "label": "Primary",
         "unit": "km",
         "match": [],
+        # Ceiling on volume over one cycle. `weekly_cap` is the old name for
+        # the same number and still works.
+        "cap": None,
         "weekly_cap": None,
         "cap_note": "",
     },
@@ -112,8 +128,9 @@ DEFAULTS = {
     },
 
     "plan": {
-        # Kinds usable in a plan's ```week block, and how each one decides it
-        # was done. complete_when: primary_volume | any_activity |
+        # Kinds usable in a plan's ```cycle block (```week is the old fence
+        # name and still parses), and how each one decides it was done.
+        # complete_when: primary_volume | any_activity |
         # activity_matches (with `match`) | always
         "kinds": {
             "work": {"label": "WORK", "complete_when": "any_activity"},
@@ -233,8 +250,31 @@ def load(force=False):
                 user = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             print(f"config.json ignored ({type(e).__name__}: {e}) — using defaults.")
-    _cache = _merge(DEFAULTS, user)
+    _cache = _derive(_merge(DEFAULTS, user))
     return _cache
+
+
+def _derive(cfg):
+    """Fill in the values computed from other values, once, at load.
+
+    Done here rather than at each call site so the dashboard, context.md and
+    the coach prompt cannot end up describing the same cycle differently.
+    """
+    cy = cfg["cycle"]
+    try:
+        cy["days"] = max(1, int(cy["days"]))
+    except (TypeError, ValueError):
+        cy["days"] = 7
+    if not cy.get("label"):
+        cy["label"] = "week" if cy["days"] == 7 else "cycle"
+    if not cy.get("per"):
+        cy["per"] = "per week" if cy["days"] == 7 else f"per {cy['days']} days"
+
+    p = cfg["primary"]
+    if p.get("cap") is None:
+        p["cap"] = p.get("weekly_cap")
+    p["weekly_cap"] = p["cap"]
+    return cfg
 
 
 def journal_grammar(cfg):

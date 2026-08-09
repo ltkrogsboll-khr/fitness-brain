@@ -612,6 +612,8 @@ def write_context(daily, sess, hr_rest, hr_max, today):
     aer, mech, prim, fm, rd = (CFG["aerobic"], CFG["mechanical"],
                                CFG["primary"], CFG["form_metric"],
                                CFG["readiness"])
+    # ACWR stays on 7:28 whatever the cycle is; only the volume cap follows it.
+    cyc = CFG["cycle"]["days"]
 
     ac_tr, ch_tr = wsum(a7, "trimp"), round(wsum(c28, "trimp") / 4.0, 1)
     ac_im, ch_im = wsum(a7, "mech_km"), round(wsum(c28, "mech_km") / 4.0, 2)
@@ -653,10 +655,11 @@ def write_context(daily, sess, hr_rest, hr_max, today):
     L = []
     L.append("# Coaching context\n")
     L.append(f"_Generated {datetime.now():%Y-%m-%d %H:%M} from data/raw. "
-             f"Data through {end_d.isoformat()}. Read `policy.md` before planning._\n")
+             f"Data through {end_d.isoformat()}. Planning cycle: {cyc} days. "
+             f"Read `policy.md` before planning._\n")
 
     L.append("## Load\n")
-    L.append("| Channel | Acute (7d) | Chronic (28d avg wk) | ACWR | Ceiling |")
+    L.append("| Channel | Acute (7d) | Chronic (28d, per 7d) | ACWR | Ceiling |")
     L.append("|---|---|---|---|---|")
     L.append(f"| {aer['label']} ({aer['unit']}) | {ac_tr} | {ch_tr} | {acwr_tr} "
              f"| {aer['acwr_ceiling']} |")
@@ -664,8 +667,9 @@ def write_context(daily, sess, hr_rest, hr_max, today):
         L.append(f"| {mech['label']} ({mech['unit']}) | {ac_im} | {ch_im} | "
                  f"{acwr_im} | {mech['acwr_ceiling']} |")
     if prim["enabled"]:
-        L.append(f"\n{prim['label']} {prim['unit']} last 7d: "
-                 f"**{wsum(a7, 'primary_km')}**.")
+        cap = f" (cap {prim['cap']})" if prim["cap"] else ""
+        L.append(f"\n{prim['label']} {prim['unit']} last {cyc}d: "
+                 f"**{wsum(window(daily, end_d, cyc), 'primary_km')}**{cap}.")
     L.append(f"\nConstants: HR_rest={hr_rest}, HR_max={hr_max}.\n")
 
     L.append("## Readiness\n")
