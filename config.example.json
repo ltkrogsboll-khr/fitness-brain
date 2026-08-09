@@ -96,9 +96,10 @@
     }
   },
 
-  "_source_comment": "Everything below is already the default — it is spelled out here only to show what the knobs are. Delete the whole block unless your export differs. If a number goes missing, run build.py and read the Ingest report: it names the file, the column and the config key.",
+  "_source_comment": "Everything below is already the default — it is spelled out here only to show what the knobs are. Delete the whole block unless your export differs. `adapter` picks which file in ingest/adapters/ reads data/raw/; garmin_csv is column-mapped rather than Garmin-specific, so a different vendor's CSV is often just different column names here. If a number goes missing, run `python3 -m ingest --check`: it names the file, the column, and how many records carried each field.",
   "source": {
     "name": "your watch",
+    "adapter": "garmin_csv",
     "files": { "activities": "activities", "sleep": "sleep", "hrv": "hrv" },
     "decimal": "auto",
     "missing": ["", "--", "---", "N/A", "n/a", "null"],

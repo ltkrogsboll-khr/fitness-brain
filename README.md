@@ -42,7 +42,7 @@ the page and the policy from quoting different ceilings at you.
 | `readiness` | Sleep, RHR and HRV thresholds |
 | `journal` | The fields you score yourself on |
 | `plan` | Session kinds, and how each decides it was done |
-| `source` | Everything about your CSV export — filenames, columns, date and duration formats, decimals, units. See [Using a different export](#using-a-different-export) |
+| `source` | Which ingest adapter reads `data/raw/`, and everything it needs to know — filenames, columns, date and duration formats, decimals, units. See [Using a different export](#using-a-different-export) |
 | `coach` | What the coach calls itself, and its escalation rule |
 
 Anything you leave out falls back to a neutral default, so a partial config is
@@ -54,7 +54,7 @@ channel, no form metric, one soreness field.
 Run it whenever you plan — every Sunday, every ten days, or whenever the last
 block ran out. Nothing schedules this for you.
 
-1. Export from your data source (e.g. watch, website) into `data/raw/` — activities, sleep, and optionally HRV.
+1. Export from your data source (e.g. watch, website) into `data/raw/` — activities, sleep, and optionally HRV. Same folder whatever the vendor; see [Using a different export](#using-a-different-export).
 2. `python3 build.py` — ingests, dedupes, derives, writes `context.md`.
 3. Ask the coach for the next block. It reads `policy.md` → `context.md` →
    `journal.md` and writes `plans/YYYY-MM-DD.md`.
@@ -92,7 +92,8 @@ bar-against-line is the same comparison at any block length.
 
 | Path | What it is |
 |---|---|
-| `build.py` | Ingest → dedupe → derive → emit. Stdlib only |
+| `ingest/` | The only code that knows what your export looks like. Swappable adapters behind a fixed contract — see [Using a different export](#using-a-different-export) |
+| `build.py` | Dedupe → derive → emit, over whatever `ingest/` returns. Stdlib only |
 | `serve.py` | Local dashboard + chat proxy. Binds 127.0.0.1 only |
 | `index.html` | The whole frontend. No build step, no CDN |
 | `config.py` | Defaults, and the merge that makes `config.json` optional |
@@ -121,8 +122,21 @@ chronic baseline possible.
 
 ## Using a different export
 
-Nothing about the engine assumes a particular vendor; `config.source` holds the
-whole contract with your CSVs.
+Everyone drops exports in the same place — `data/raw/`. What differs per vendor
+is the **adapter** that reads them:
+
+```
+data/raw/*  →  [ adapter ]  →  sessions / sleep / hrv  →  [ the engine ]
+                swappable       fixed contract            never changes
+```
+
+Downstream of that arrow nothing knows what a watch is, so a new data source
+never needs an edit outside `ingest/`. There are two routes, and the cheap one
+usually works.
+
+**Route 1 — config only.** The default adapter (`garmin_csv`) is column-mapped
+rather than Garmin-specific: if your export is one CSV per kind with one row per
+workout, point `config.source` at your header names and you're done.
 
 | Key | Assumption it removes |
 |---|---|
@@ -146,20 +160,42 @@ Ingest
   ! activities: 3 rows skipped, unparsed timestamp '08/02/2026 06:00' — add its format to config.source.datetime_formats
 ```
 
-The dashboard's **Rebuild from CSVs** shows the same report, but only when
-something was skipped.
+`python3 -m ingest --check` goes further: it runs ingestion alone, writes
+nothing, and prints how many records carried each field — a column that mapped
+to nothing shows up as `0/120` instead of as a puzzling chart a week later. The
+dashboard's **Rebuild from CSVs** shows the report too, but only when something
+was skipped.
 
-Two assumptions are still in code, and both are opt-in: year-less HRV dates
-(`8 Aug`, English months, inferred by walking backwards from the newest row —
-used only when the value doesn't match `date_formats`), and running/cycling
-form fields like GCT balance.
+**Route 2 — an adapter.** Config can't fix a different *shape*: one row per lap,
+JSON or TCX, several files per period, sleep stages that need summing. That's
+one Python file:
 
-If your source is far enough from a CSV export that none of this fits, the better
-seam is `data/daily.csv` and `data/sessions.csv`. That schema is the real
-interface: write those two files yourself and the dashboard, ACWR channels,
-context and coach all work unchanged. (Their distance columns are named `_km`
-whatever `distance_unit` says; the values are in your unit, the names are just
-history.)
+```sh
+cp ingest/adapters/_template.py ingest/adapters/local/mysource.py
+#   ...then in config.json:  "source": { "adapter": "mysource" }
+python3 -m ingest --check
+```
+
+`ingest/adapters/local/` is **yours** — no upstream commit ever writes there, so
+your adapter survives every `git pull`, and a file in it shadows a shipped
+adapter of the same name if you'd rather bend one than start over. The contract
+is `ingest/README.md`; the field list with units is `ingest/schema.py`. If you
+work with an agent, the repo ships a skill for this
+(`.claude/skills/ingest-adapter/`) — "make this read my Strava export" is
+usually the whole prompt.
+
+Adapters here are welcome as PRs: the next person with that watch gets it free.
+
+Two assumptions are still in the default adapter, and both are opt-in: year-less
+HRV dates (`8 Aug`, English months, inferred by walking backwards from the
+newest row — used only when the value doesn't match `date_formats`), and
+running/cycling form fields like GCT balance.
+
+Below the adapter there's still a lower seam: `data/daily.csv` and
+`data/sessions.csv`. Write those two files by any means you like and the
+dashboard, ACWR channels, context and coach work unchanged. (Their distance
+columns are named `_km` whatever `distance_unit` says; the values are in your
+unit, the names are just history.)
 
 ## Scope
 

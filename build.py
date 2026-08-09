@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Ingest activity/sleep CSV exports -> accumulate a local database -> emit a brief.
+Ingest activity/sleep exports -> accumulate a local database -> emit a brief.
 
 Why this exists: watch vendors cap Sleep/HRV exports at a rolling few weeks. This
 script upserts every export into data/daily.csv and data/sessions.csv, so history
 accumulates locally and that window stops mattering after a few months.
 
+Reading the export is not this file's job. `ingest/` does that and hands back
+sessions/sleep/hrv records in the shape ingest/schema.py defines; everything
+here works on those, so a different data source is an adapter, not an edit.
+
 Run:  python3 build.py
-Input:  data/raw/*.csv   -- routed by filename, columns named in config.json
+Input:  data/raw/*     -- read by the adapter named in config.source.adapter
 Output: data/daily.csv, data/sessions.csv, context.md
 """
 
@@ -16,10 +20,11 @@ from __future__ import annotations
 import csv
 import math
 import os
-import re
 from datetime import date, datetime, timedelta
 
 import config
+import ingest
+from ingest.parsers import read_csv
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 RAW = os.path.join(ROOT, "data", "raw")
@@ -29,368 +34,14 @@ CONTEXT = os.path.join(ROOT, "context.md")
 JOURNAL = os.path.join(ROOT, "journal.md")
 
 CFG = config.load()
-SRC = CFG["source"]
 
 # Written by earlier versions under sport-specific names. Dropped on rebuild so
 # they don't linger in the CSVs as stale duplicates of the renamed field.
 LEGACY_COLS = {"run_km", "avg_cadence", "impact_km"}
 
-MISSING = set(SRC["missing"])
-
-# Metres per unit of source.distance_unit -- only metre_distance_types needs it.
-PER_METRE = {"km": 1000.0, "mi": 1609.344}.get(SRC["distance_unit"], 1000.0)
-
-
-# --- Parsing helpers ---------------------------------------------------------
-# Decimal convention of the file currently being read. Set by read_source();
-# num() reads it. A global rather than a parameter because every field parser
-# below would otherwise have to thread it through.
-DEC = "dot"
-
-# '6,56' is unambiguous evidence for a decimal comma, '6.56' for a decimal dot.
-# Thousands separators ('1,024', '7.032') match neither on purpose -- three
-# trailing digits is exactly the ambiguous case, so it gets no vote.
-_COMMA_DEC = re.compile(r"\d,\d{1,2}(?!\d)")
-_DOT_DEC = re.compile(r"\d\.\d{1,2}(?!\d)")
-_THOUSAND_DOT = re.compile(r"-?\d{1,3}(\.\d{3})+")
-
-
-def sniff_decimal(rows):
-    comma = dot = 0
-    for r in rows:
-        for v in r.values():
-            if isinstance(v, str) and ("," in v or "." in v):
-                comma += len(_COMMA_DEC.findall(v))
-                dot += len(_DOT_DEC.findall(v))
-    return "comma" if comma > dot else "dot"
-
-
-def num(v):
-    """Parse a numeric cell in the current file's decimal convention."""
-    if v is None:
-        return None
-    s = str(v).strip().strip('"').lstrip("'")
-    if s in MISSING:
-        return None
-    if DEC == "comma":
-        if "," in s:  # '1.234,5' -- a dot alongside it can only be thousands
-            s = s.replace(".", "").replace(",", ".")
-        elif _THOUSAND_DOT.fullmatch(s):
-            s = s.replace(".", "")  # '7.032' steps -> 7032
-    else:
-        s = s.replace(",", "")  # in a dot locale a comma can only be thousands
-    try:
-        return float(s)
-    except ValueError:
-        return None
-
-
-# '6h 24min', '45 min', '1h 5min 30s'. Needs at least one unit letter, so a bare
-# number falls through to the 'minutes'/'seconds' formats instead of matching here.
-_HM_TEXT = re.compile(r"(?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?\s*(?:(\d+)\s*s)?",
-                      re.IGNORECASE)
-
-
-def dur_to_sec(v, formats=None):
-    """Seconds from a duration cell, trying `formats` in order.
-
-    The vocabulary is documented on config.source.duration_formats. Defaults to
-    the activity shapes, which is what durations and paces use.
-    """
-    if v is None:
-        return None
-    s = str(v).strip().strip('"')
-    if s in MISSING or not s:
-        return None
-    for f in formats or SRC["duration_formats"]["activity"]:
-        if f in ("hms", "hm") and ":" in s:
-            try:
-                parts = [float(p.replace(",", ".")) for p in s.split(":")]
-            except ValueError:
-                continue
-            while len(parts) < 3:
-                # '6:50' is mm:ss under hms, but hh:mm under hm
-                if f == "hms":
-                    parts.insert(0, 0.0)
-                else:
-                    parts.append(0.0)
-            return parts[0] * 3600 + parts[1] * 60 + parts[2]
-        if f == "hm_text":
-            m = _HM_TEXT.fullmatch(s)
-            if m and any(m.groups()):
-                h, mi, sec = (int(g or 0) for g in m.groups())
-                return h * 3600 + mi * 60 + sec
-        if f in ("minutes", "seconds"):
-            n = num(s)
-            if n is not None:
-                return n * 60 if f == "minutes" else n
-    return None
-
-
-def sleep_to_min(v):
-    s = dur_to_sec(v, SRC["duration_formats"]["sleep"])
-    return round(s / 60.0) if s else None
-
-
-def parse_dt(s, formats):
-    """First format that fits, or None. Timezones are converted to local and
-    dropped -- a training log is read in the timezone it was lived in."""
-    for f in formats:
-        try:
-            d = datetime.strptime(s, f)
-        except ValueError:
-            continue
-        return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
-    return None
-
-
-def parse_date(s, formats):
-    d = parse_dt(s, formats)
-    return d.date() if d else None
-
-
-def ms(v):
-    """'57ms' -> 57.0 -- drops whatever unit suffix the export writes."""
-    if v is None or str(v).strip() in MISSING:
-        return None
-    return num(re.sub(r"[^\d,.\-]", "", str(v)))
-
-
-def first_two_nums(v):
-    """'63ms - 78ms' -> (63.0, 78.0). Any two numbers in the cell will do."""
-    if v is None or str(v).strip() in MISSING:
-        return None, None
-    got = re.findall(r"\d+(?:[.,]\d+)?", str(v))
-    return (num(got[0]), num(got[1])) if len(got) >= 2 else (None, None)
-
-
-def gct_left(v):
-    """'49,5% L / 50,5% R' -> 49.5 -- the first percentage is the left side."""
-    if v is None or str(v).strip() in MISSING:
-        return None
-    m = re.search(r"([\d,\.]+)\s*%", str(v))
-    return num(m.group(1)) if m else None
-
-
-def strip_bom(s):
-    return s.lstrip("﻿") if isinstance(s, str) else s
-
-
-def read_csv(path):
-    """-> (header, rows). No number parsing; that is num()'s job."""
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        rdr = csv.DictReader(f)
-        rdr.fieldnames = [strip_bom(c).strip() for c in (rdr.fieldnames or [])]
-        return list(rdr.fieldnames), [dict(r) for r in rdr]
-
-
-def read_source(path):
-    """read_csv, plus settle this file's decimal convention before anything
-    reads a number out of it."""
-    global DEC
-    header, rows = read_csv(path)
-    DEC = SRC["decimal"] if SRC["decimal"] in ("comma", "dot") \
-        else sniff_decimal(rows)
-    return header, rows
-
-
-# --- Ingest report -----------------------------------------------------------
-# Every parse failure below is a skip. Counting and naming them here is what
-# turns "the dashboard is empty" into "column 'Avg HR' isn't in your export".
-def new_report():
-    return {"files": [], "warn": []}
-
-
-# File kind -> the config.source key holding its column names.
-COLUMN_KEY = {"activities": "activity_columns", "sleep": "sleep_columns",
-              "hrv": "hrv_columns"}
-
-
-def check_columns(kind, header, cols, rep):
-    absent = sorted({v for v in cols.values() if v and v not in header})
-    if absent:
-        rep["warn"].append(
-            f"{kind}: no column named {', '.join(repr(a) for a in absent)} "
-            f"— fix or null out config.source.{COLUMN_KEY[kind]}")
-
-
-def date_column(col, header):
-    """Configured date column, defaulting to the first one."""
-    return col.get("date") or (header[0] if header else None)
-
-
-def note_skips(rep, kind, bad, what, hint):
-    """One line naming what was dropped and which key would have kept it."""
-    if bad:
-        rep["warn"].append(
-            f"{kind}: {len(bad)} row{'s' if len(bad) > 1 else ''} skipped, "
-            f"unparsed {what} {bad[0]!r} — {hint}")
-
-
-def print_report(rep):
-    if rep["files"]:
-        w = max(len(f["file"]) for f in rep["files"])
-        print("Ingest")
-        for f in rep["files"]:
-            print(f"  {f['file']:<{w}}  {f['kind']:<10} read {f['read']:>5}  "
-                  f"kept {f['kept']:>5}  skipped {f['read'] - f['kept']:>4}  "
-                  f"{f['decimal']}-decimal"
-                  + (f"  ({f['note']})" if f.get("note") else ""))
-    for line in rep["warn"]:
-        print(f"  ! {line}")
-
-
-# --- Loaders -----------------------------------------------------------------
-def load_activities(path, rep):
-    col = SRC["activity_columns"]
-    metres = [w.lower() for w in SRC["metre_distance_types"]]
-    header, rows = read_source(path)
-    check_columns("activities", header, col, rep)
-    out, bad = [], []
-    for r in rows:
-        raw_dt = (r.get(col["date"]) or "").strip().strip('"')
-        if not raw_dt:
-            continue
-        dt = parse_dt(raw_dt, SRC["datetime_formats"])
-        if dt is None:
-            bad.append(raw_dt)
-            continue
-        atype = (r.get(col["type"]) or "").strip().strip('"')
-        dist = num(r.get(col["distance"]))
-        # Some activity types are exported in metres, the rest in distance_unit.
-        if dist is not None and any(w in atype.lower() for w in metres):
-            dist = dist / PER_METRE
-        out.append(
-            {
-                "datetime": dt.isoformat(sep=" "),
-                "date": dt.date().isoformat(),
-                "type": atype,
-                "title": (r.get(col["title"]) or "").strip().strip('"'),
-                "distance_km": dist,
-                "duration_s": dur_to_sec(r.get(col["duration"])),
-                "avg_hr": num(r.get(col["avg_hr"])),
-                "max_hr": num(r.get(col["max_hr"])),
-                "aerobic_te": num(r.get(col["aerobic_te"])),
-                "cadence": num(r.get(col["cadence"])),
-                "pace_s_per_km": dur_to_sec(r.get(col["pace"])),
-                "ascent_m": num(r.get(col["ascent"])),
-                "stride_m": num(r.get(col["stride"])),
-                "vert_osc_cm": num(r.get(col["vert_osc"])),
-                "gct_ms": num(r.get(col["gct"])),
-                "gct_left_pct": gct_left(r.get(col["gct_balance"])),
-                "calories": num(r.get(col["calories"])),
-            }
-        )
-    note_skips(rep, "activities", bad, "timestamp",
-               "add its format to config.source.datetime_formats")
-    return out, {"read": len(rows), "kept": len(out), "decimal": DEC}
-
-
-def load_sleep(path, rep):
-    col = SRC["sleep_columns"]
-    header, rows = read_source(path)
-    check_columns("sleep", header, col, rep)
-    dcol = date_column(col, header)
-    out, bad = {}, []
-    for r in rows:
-        raw = (r.get(dcol) or "").strip()
-        if not raw:
-            continue
-        parsed = parse_date(raw, SRC["date_formats"])
-        if parsed is None:
-            bad.append(raw)
-            continue
-        d = parsed.isoformat()
-        dur = sleep_to_min(r.get(col["duration"]))
-        need = sleep_to_min(r.get(col["need"]))
-        out[d] = {
-            "date": d,
-            "sleep_score": num(r.get(col["score"])),
-            "rhr": num(r.get(col["rhr"])),
-            "body_battery": num(r.get(col["body_battery"])),
-            "respiration": num(r.get(col["respiration"])),
-            "hrv_7d": num(r.get(col["hrv_7d"])),
-            "sleep_quality": (r.get(col["quality"]) or "").strip(),
-            "sleep_min": dur,
-            "sleep_need_min": need,
-            "sleep_debt_min": (need - dur) if (dur and need) else None,
-            "bedtime": (r.get(col["bedtime"]) or "").strip(),
-            "waketime": (r.get(col["waketime"]) or "").strip(),
-        }
-    note_skips(rep, "sleep", bad, "date",
-               "add its format to config.source.date_formats")
-    return out, {"read": len(rows), "kept": len(out), "decimal": DEC}
-
-
-MONTHS = {m: i for i, m in enumerate(
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
-
-
-def infer_date(raw, cursor, today):
-    """Some HRV exports date rows '8 Aug', with no year. Rows are consecutive
-    descending days, so anchor the newest to the most recent matching date
-    <= today and walk back. -> (date|None, cursor)."""
-    m = re.match(r"(\d{1,2})\s+([A-Za-z]{3})", raw)
-    if not m:
-        return None, cursor
-    day, mon = int(m.group(1)), MONTHS.get(m.group(2)[:3].title())
-    if not mon:
-        return None, cursor
-    if cursor is None:
-        try:
-            cand = date(today.year, mon, day)
-        except ValueError:
-            return None, cursor
-        if cand > today:
-            cand = date(today.year - 1, mon, day)
-        cursor = cand
-    else:
-        cursor = cursor - timedelta(days=1)
-        # self-heal if the file ever skips a day
-        if cursor.day != day or cursor.month != mon:
-            try:
-                cursor = date(cursor.year, mon, day)
-            except ValueError:
-                pass
-    return cursor, cursor
-
-
-def load_hrv(path, today, rep):
-    """Dates that match date_formats are used as-is; year-less ones fall back to
-    infer_date, which is the only English-month assumption left in here."""
-    col = SRC["hrv_columns"]
-    header, rows = read_source(path)
-    check_columns("hrv", header, col, rep)
-    dcol = date_column(col, header)
-    dated, bad = [], []
-    cursor, inferred = None, 0
-    for r in rows:
-        raw = (r.get(dcol) or "").strip()
-        if not raw:
-            continue
-        d = parse_date(raw, SRC["date_formats"])
-        if d is None:
-            d, cursor = infer_date(raw, cursor, today)
-            if d is None:
-                bad.append(raw)
-                continue
-            inferred += 1
-        lo, hi = first_two_nums(r.get(col["baseline"]))
-        dated.append(
-            {
-                "date": d.isoformat(),
-                "hrv_night": ms(r.get(col["overnight"])),
-                "hrv_base_lo": lo,
-                "hrv_base_hi": hi,
-            }
-        )
-    note_skips(rep, "hrv", bad, "date",
-               "add its format to config.source.date_formats")
-    return {d["date"]: d for d in dated}, {
-        "read": len(rows), "kept": len(dated), "decimal": DEC,
-        "note": f"{inferred} year-less dates inferred" if inferred else "",
-    }
+# Only for re-reading our own accumulated CSVs, where a blank cell is the
+# normal way to say "no reading".
+MISSING = set(CFG["source"]["missing"]) | {""}
 
 
 # --- Load model --------------------------------------------------------------
@@ -460,55 +111,26 @@ def fnum(r, k):
 def main():
     today = date.today()
 
-    pat = SRC["files"]
-
     # First run after a clone: make the drop-box rather than fail on it.
     if not os.path.isdir(RAW):
         os.makedirs(RAW, exist_ok=True)
         print(f"Created {os.path.relpath(RAW, ROOT)}/ — it was empty.\n"
-              f"Export your CSVs there, then run this again. Filenames are matched\n"
-              f"on the substrings {', '.join(repr(v) for v in pat.values())} "
-              f"(configurable in config.json).")
+              + ingest.hint(CFG))
         return
 
-    rep = new_report()
-    acts, sleep, hrv = [], {}, {}
-    for fn in sorted(os.listdir(RAW)):
-        p = os.path.join(RAW, fn)
-        low = fn.lower()
-        if not low.endswith(".csv"):
-            continue
-        hits = [k for k, v in pat.items() if v and v.lower() in low]
-        if not hits:
-            rep["warn"].append(
-                f"{fn}: matches no pattern in config.source.files "
-                f"({', '.join(repr(v) for v in pat.values())}) — not read")
-            continue
-        if len(hits) > 1:
-            rep["warn"].append(f"{fn}: matches {', '.join(hits)} — read as "
-                               f"{hits[0]}; make config.source.files patterns "
-                               f"more specific")
-        kind = hits[0]
-        if kind == "hrv":
-            data, st = load_hrv(p, today, rep)
-            hrv.update(data)
-        elif kind == "sleep":
-            data, st = load_sleep(p, rep)
-            sleep.update(data)
-        elif kind == "activities":
-            data, st = load_activities(p, rep)
-            acts += data
-        else:
-            rep["warn"].append(f"{fn}: no loader for source kind {kind!r} — "
-                               f"config.source.files knows activities, sleep, hrv")
-            continue
-        rep["files"].append({"file": fn, "kind": kind, **st})
+    rep = ingest.Report()
+    try:
+        got = ingest.run(RAW, CFG, rep)
+    except ingest.AdapterError as e:
+        print(f"Ingest failed: {e}")
+        return
+    acts, sleep, hrv = got.sessions, got.sleep, got.hrv
 
-    print_report(rep)
+    rep.print()
     if acts and not any(a["avg_hr"] for a in acts):
         print("  ! no activity has an average heart rate — TRIMP, and therefore "
-              "every aerobic load figure, will be zero. Check "
-              "config.source.activity_columns.avg_hr")
+              "every aerobic load figure, will be zero. Check what your adapter "
+              "maps to avg_hr (python3 -m ingest --check)")
 
     hr_max = CFG["athlete"]["hr_max_override"] or (
         max([a["max_hr"] for a in acts if a["max_hr"]] or [180]) + 5
@@ -545,9 +167,10 @@ def main():
 
     all_dates = sorted(set(list(sleep.keys()) + list(hrv.keys()) + list(by_day.keys())))
     if not all_dates:
-        print("No usable rows. Drop your CSV exports in data/raw/.\n"
+        print("No usable rows. Drop your exports in data/raw/.\n"
               "If there are files there already, the Ingest lines above name "
-              "what was skipped and which config.source key would fix it.")
+              "what was skipped and which key would fix it; "
+              "`python3 -m ingest --check` shows it field by field.")
         return
 
     start, end = date.fromisoformat(all_dates[0]), date.fromisoformat(all_dates[-1])

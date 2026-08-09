@@ -138,15 +138,28 @@ DEFAULTS = {
         },
     },
 
-    # Where the CSVs come from. Files in data/raw/ are routed by substring match
-    # on the filename, and columns are read by the header names below -- so a
-    # different vendor's export is a config change, not a code change.
+    # Where the data comes from. Everything here is read by the ingest adapter
+    # and by nothing else -- the engine downstream sees only the normalized
+    # records in ingest/schema.py.
     #
     # If a number goes missing from the dashboard, run build.py and read the
     # Ingest report: unmatched files, absent columns and unparseable dates are
-    # all named there rather than skipped silently.
+    # all named there rather than skipped silently. `python3 -m ingest --check`
+    # goes further and shows how many records carried each field.
     "source": {
         "name": "your watch",
+
+        # Which adapter in ingest/adapters/ reads your export. The default is
+        # column-mapped CSV: it fits Garmin Connect out of the box, and fits
+        # other vendors by renaming the columns below. Anything shaped
+        # differently gets its own adapter -- `python3 -m ingest` lists them,
+        # and .claude/skills/ingest-adapter walks an agent through writing one.
+        "adapter": "garmin_csv",
+
+        # Free-form, for adapters that need settings of their own. Nothing in
+        # this repo reads it; your adapter does, via cfg["source"]["options"].
+        "options": {},
+
         "files": {"activities": "activities", "sleep": "sleep", "hrv": "hrv"},
 
         # Cell values that mean "no reading".
