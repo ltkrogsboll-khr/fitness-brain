@@ -88,6 +88,13 @@ DEFAULTS = {
 
     # Any per-session number worth holding to a target — cadence, stroke rate,
     # power. Read straight from a column of data/sessions.csv.
+    #
+    # A warning about the default. `cadence` is the vendor's session average,
+    # and vendors average in the walking: a run held at 171 spm that ends in a
+    # cooldown walk is reported as 154. Judging "does turnover sag on easy
+    # runs?" from that field answers a different question than the one asked,
+    # because a run-walk sags for a reason that has nothing to do with gait.
+    # `moving_cadence`, written by analyze.py from a .fit file, excludes it.
     "form_metric": {
         "enabled": False,
         "field": "cadence",
