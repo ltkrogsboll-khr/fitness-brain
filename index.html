@@ -922,8 +922,11 @@ const saveHistory = () => {
 };
 function md(t){
   // The [[journal: …]] marker is machinery, not content — hide it, including
-  // the partial form that appears mid-stream.
+  // the partial form that appears mid-stream. A plan's markers go the same way,
+  // but its body is the answer to the question and stays.
   return t.replace(/\[\[journal:[\s\S]*?(\]\]|$)/g,'')
+    .replace(/\[\[plan:\s*[\d-]*\s*\]\]/g,'').replace(/\[\[\/plan\]\]/g,'')
+    .replace(/\[\[plan:[^\]]*$/g,'')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/```([\s\S]*?)```/g,(m,c)=>`<pre class="bot"><code>${c}</code></pre>`)
     .replace(/`([^`]+)`/g,'<code>$1</code>')
@@ -967,6 +970,17 @@ async function send(){
             `<div style="margin-top:8px;font-size:11.5px;color:var(--ink2)">
                ✓ saved to journal — <code>${e.journal.replace(/</g,'&lt;')}</code></div>`);
           load();   // refresh the journal list below
+        }
+        if(e.done && e.plan){
+          // A saved plan changes the day strip, so say so and re-read it. The
+          // fence warning matters: without it the file is fine and the strip
+          // stays empty, which otherwise looks like the save failed.
+          out.insertAdjacentHTML('beforeend',
+            `<div style="margin-top:8px;font-size:11.5px;color:var(--ink2)">
+               ✓ ${e.plan.replaced ? 'replaced' : 'saved'} <code>${e.plan.file}</code>
+               ${e.plan.has_fence ? '— day strip updated'
+                 : '<span class="err">— but it has no ```cycle block, so the day strip can\'t read it</span>'}</div>`);
+          load();   // re-read the plan and redraw the strip
         }
       }
     }

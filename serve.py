@@ -133,6 +133,7 @@ def build_preamble(cfg):
     c = cfg["coach"]
     safety = f"\nSafety: {c['safety'].strip()}\n" if c.get("safety", "").strip() else ""
     fields = ", ".join(f["key"] for f in cfg["journal"]["fields"]) or "none"
+    kinds = ", ".join(cfg["plan"]["kinds"]) or "work, rest"
     return f"""You are the athlete's {c['role']} for {c['system']}.
 
 Below are three documents. Treat them as authoritative:
@@ -185,6 +186,34 @@ ending your reply with a line in exactly this form:
     [[journal: {config.journal_grammar(cfg)}]]
 
 It is stripped from what they see and appended to journal.md verbatim.
+
+WRITING A PLAN
+You cannot write files. The only things that leave this conversation are the
+two markers on this page — so if you describe a plan without the marker below,
+nothing is saved and the dashboard goes on showing the old one. Never tell the
+athlete you have updated, saved or written a plan unless you emitted it.
+
+To publish a training block, wrap the whole plan document in:
+
+    [[plan: YYYY-MM-DD]]
+    # <title>
+    …the full plan in markdown…
+    [[/plan]]
+
+The date is the plan's first day and becomes its filename; the newest file in
+plans/ is the one the dashboard reads. The markers are stripped and the plan
+itself stays visible, so write it for the athlete to read, not as machinery.
+
+It MUST contain a fenced ```cycle block, one line per day, or the dashboard
+renders no day strip:
+
+    ```cycle
+    YYYY-MM-DD | <kind> | <short title> | <detail>
+    ```
+
+Kinds available: {kinds}. Write every day of the block, including rest days.
+Only emit a plan when asked for one, or when a rule clearly forces a change to
+the current block — and say what changed and why.
 
 Write one only for things worth re-reading weeks from now: {c['journal_examples']}.
 The scored fields ({fields}) are optional -- omit any the athlete didn't mention,
@@ -466,24 +495,38 @@ class Handler(BaseHTTPRequestHandler):
                                 "out": (r.stdout + r.stderr).strip()})
 
     JOURNAL_RE = re.compile(r"\[\[journal:\s*(.+?)\s*\]\]", re.S)
+    # A plan is multi-line and contains its own ``` fences, so it needs a
+    # closing marker rather than a single bracketed line.
+    PLAN_RE = re.compile(
+        r"\[\[plan:\s*(\d{4}-\d{2}-\d{2})\s*\]\]\s*(.*?)\s*\[\[/plan\]\]", re.S)
 
     def persist_turn(self, question, reply):
-        """Archive every exchange; promote any [[journal: …]] line to journal.md.
+        """Archive every exchange; promote the markers to real files.
 
-        Two different jobs: the transcript is a full record you can search later,
-        the journal is the distilled memory that gets read back into every future
-        conversation. Chat that changes nothing durable belongs only in the first.
+        Three different jobs. The transcript is a full record you can search
+        later. The journal is the distilled memory read back into every future
+        conversation. A plan is the artefact the dashboard renders its day strip
+        from. Chat that changes nothing durable belongs only in the first.
+
+        -> (journal_line | None, plan_info | None)
         """
         os.makedirs(os.path.join(ROOT, "chats"), exist_ok=True)
         now = dt.datetime.now()
         path = os.path.join(ROOT, "chats", f"{now:%Y-%m}.md")
-        clean = self.JOURNAL_RE.sub("", reply).strip()
+        # The journal marker is bookkeeping and comes out. A plan is the answer
+        # to what was asked, so only its markers go -- the body stays readable
+        # in the transcript.
+        clean = self.JOURNAL_RE.sub("", reply)
+        clean = self.PLAN_RE.sub(lambda m: m.group(2), clean).strip()
         with open(path, "a", encoding="utf-8") as f:
             if f.tell() == 0:
                 f.write(f"# Chat transcript — {now:%B %Y}\n")
             f.write(f"\n## {now:%Y-%m-%d %H:%M}\n\n"
                     f"**me:** {question.strip()}\n\n**coach:** {clean}\n")
 
+        return self.save_journal(reply), self.save_plan(reply)
+
+    def save_journal(self, reply):
         m = self.JOURNAL_RE.search(reply)
         if not m:
             return None
@@ -491,12 +534,36 @@ class Handler(BaseHTTPRequestHandler):
         if not line[:4].isdigit():          # must start with a date
             return None
         jp = os.path.join(ROOT, "journal.md")
-        existing = read("journal.md")
-        if line in existing:                 # don't duplicate
+        if line in read("journal.md"):       # don't duplicate
             return None
         with open(jp, "a", encoding="utf-8") as f:
             f.write("\n" + line)
         return line
+
+    def save_plan(self, reply):
+        """Write a [[plan: YYYY-MM-DD]] … [[/plan]] block to plans/.
+
+        Without this the coach can compose a plan and has nowhere to put it,
+        which it has no way to discover -- so it reports success and the
+        dashboard goes on rendering last week. The day strip reads the
+        newest file in plans/, so writing one is what actually changes the plan.
+        """
+        m = self.PLAN_RE.search(reply)
+        if not m:
+            return None
+        day, bodymd = m.group(1), m.group(2).strip()
+        if not bodymd:
+            return None
+        os.makedirs(os.path.join(ROOT, "plans"), exist_ok=True)
+        rel = f"plans/{day}.md"
+        full = os.path.join(ROOT, rel)
+        existed = os.path.exists(full)
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(bodymd.rstrip() + "\n")
+        # A plan with no cycle fence renders no day strip. Say so rather than
+        # letting it look saved-but-broken.
+        has_fence = bool(re.search(r"```(cycle|week)\b", bodymd))
+        return {"file": rel, "replaced": existed, "has_fence": has_fence}
 
     def chat(self, body):
         if not resolve_api_key()[0]:
@@ -560,8 +627,8 @@ class Handler(BaseHTTPRequestHandler):
                     emit({"t": "\n\n_(response stopped: refusal)_"})
 
                 reply = "".join(b.text for b in final.content if b.type == "text")
-                logged = self.persist_turn(msgs[-1]["content"], reply)
-                emit({"done": True, "journal": logged,
+                logged, planned = self.persist_turn(msgs[-1]["content"], reply)
+                emit({"done": True, "journal": logged, "plan": planned,
                       "usage": {"in": final.usage.input_tokens,
                                 "out": final.usage.output_tokens}})
         except BrokenPipeError:
