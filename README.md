@@ -166,6 +166,14 @@ Where it goes:
 The per-second streams are never stored: nothing downstream can consume 1 Hz
 data, and the file is still on disk when a new question needs asking of it.
 
+Worth knowing before trusting a trend built only on the CSV: a swing in the
+session-average cadence, pace, or HR across a stretch of your history can be a
+swing in how much of each session was spent walking, not a change in fitness
+or form. `context.md` states how many sessions carry the `.fit` correction and
+how many don't, precisely so a real pattern isn't confused with a warm-up
+ratio that happened to vary — read a surprising CSV-only trend with that in
+mind before treating it as a diagnosis.
+
 Targets live in `config.analysis` (`hr_cap`, `cadence_target`, `cadence_band`)
 because they're what the *current plan* asked for — update them when the plan
 changes. For a one-off, `python3 analyze.py` takes the newest file in the folder

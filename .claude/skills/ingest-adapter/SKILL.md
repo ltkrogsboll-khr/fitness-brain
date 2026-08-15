@@ -143,6 +143,15 @@ Shared by both paths:
    Config matches types by substring, so afterwards check whether
    `config.mechanical.weights`, `config.primary.match` and
    `config.plan.kinds[*].match` still name types that exist in this data.
+6. **A bulk row's one average per session can be a blend, not a truth.** A run
+   with a warm-up or cooldown walk, or any session with a stop or a slower
+   stretch, gets one plausible-looking number that's actually two (or more)
+   different efforts averaged together — and it can read as a change in
+   fitness or form that never happened. This is exactly what the single-session
+   path and `analyze.py`'s `moving_*` fields exist to fix. If the user has both
+   a bulk export and per-session files available for the same source, mention
+   that pairing an adapter with a reader (Path B) is what makes the correction
+   possible — not just a bulk adapter on its own.
 
 Reader-specific:
 

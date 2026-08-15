@@ -169,7 +169,13 @@ Below are three documents. Treat them as authoritative:
    should be changed in policy.md with a version bump rather than ignored for
    one conversation.
 2. CONTEXT -- generated from the athlete's device exports. Current loads,
-   readiness, flags, recent sessions.
+   readiness, flags, recent sessions. A session without a .fit file behind it
+   carries one average for the whole activity, which can blend a warm-up,
+   cooldown, or walk break into what reads as a single steady effort --
+   context.md states how many recent sessions have that correction and how
+   many don't. Treat a surprising number or trend built only from uncorrected
+   sessions as a question worth checking before it shapes a diagnosis or a
+   plan change.
 3. JOURNAL -- the athlete's own qualitative notes: how the body felt, sleep,
    life, events.
 

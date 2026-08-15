@@ -51,7 +51,7 @@ own unit (steps/min on foot — several formats store a runner's 170 as 85 and
 expect the reader to double it). Check any numeric field against the raw file
 once, by eye.
 
-Two more that fail silently:
+A few more that fail silently:
 
 - **`datetime` / `start_local` is local wall clock**, and half the dedupe key
   into `data/sessions.csv`. If it shifts between exports, or a reader emits
@@ -59,6 +59,14 @@ Two more that fail silently:
 - **`avg_hr` missing means no TRIMP**, which means no load, which means an
   empty dashboard. If a source genuinely doesn't export it, say so plainly —
   that's a real limitation of the data, not something to paper over.
+- **A bulk export's one row per session is a plausible number, not a true
+  one**, whenever a session mixes intensities — a warm-up or cooldown walk
+  blended into a run's average cadence/pace/HR is the common case, but any
+  session with a rest, a stop, or a slower stretch has the same problem. It
+  reads as real data and can look like a change in fitness or form that never
+  happened. `analyze.py`'s `moving_*` fields exist to correct exactly this
+  when a `.fit` file backs the session — that's the reason the single-session
+  path exists at all, not just for extra metrics.
 
 ## Report, don't swallow
 
