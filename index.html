@@ -182,6 +182,8 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 .bot code{background:var(--surface);padding:1px 4px;border-radius:4px;
   font-size:12px;border:1px solid var(--border)}
 .bot h4{margin:10px 0 4px;font-size:13px}
+.sys{align-self:center;background:none;color:var(--muted);font-size:11.5px;
+  padding:2px 0;max-width:100%;text-align:center}
 .bot ul{margin:6px 0;padding-left:20px}
 .composer{display:flex;gap:8px;margin-top:10px}
 .composer textarea{flex:1;resize:vertical;min-height:44px;max-height:180px}
@@ -245,7 +247,7 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 <div class="card">
   <div id="log"></div>
   <div class="composer">
-    <textarea id="q" rows="2" placeholder="Ask anything — it reads policy.md, context.md and the journal each turn. ⌘/Ctrl+Enter to send."></textarea>
+    <textarea id="q" rows="2" placeholder="Ask anything — it reads policy.md, context.md and the journal each turn. Enter to send, Shift+Enter for a new line."></textarea>
     <button class="primary" id="send">Send</button>
   </div>
   <div class="hint" id="hint"></div>
@@ -880,6 +882,7 @@ async function load(){
   C = D.config;            // labels, ceilings and targets — see config.json
   HELP = buildHelp(C);
   render();
+  checkContextRefresh();
 }
 
 // The ingest report is the only place a mis-mapped column shows up as words
@@ -925,6 +928,26 @@ try { history = JSON.parse(localStorage.getItem(LS) || '[]'); } catch { history 
 const saveHistory = () => {
   try { localStorage.setItem(LS, JSON.stringify(history.slice(-40))); } catch {}
 };
+
+// context.md only moves when a rebuild runs -- that's the one event that can
+// leave an earlier reply's numbers stale next to a fresh CONTEXT block. Rather
+// than guess from turn count, watch the file's own mtime and flag the seam
+// once, right where it actually falls, instead of silently letting the coach
+// reconcile old and new numbers on its own.
+const LS_CTX = 'fa.chat.ctxmtime';
+let ctxMtime = localStorage.getItem(LS_CTX);
+let pendingRefreshNote = false;
+function checkContextRefresh(){
+  const cur = D?.context_mtime;
+  if(cur == null) return;
+  const curStr = String(cur);
+  if(ctxMtime !== null && ctxMtime !== curStr && history.length){
+    bubble('sys', 'Context refreshed since this thread started — earlier numbers above may be out of date.');
+    pendingRefreshNote = true;
+  }
+  ctxMtime = curStr;
+  localStorage.setItem(LS_CTX, ctxMtime);
+}
 function md(t){
   // The [[journal: …]] marker is machinery, not content — hide it, including
   // the partial form that appears mid-stream. A plan's markers go the same way,
@@ -947,7 +970,16 @@ async function send(){
   const q = $('#q').value.trim(); if(!q) return;
   $('#q').value=''; $('#send').disabled=true;
   bubble('me', md(q));
-  history.push({role:'user', content:q}); saveHistory();
+  // The divider bubble told the athlete; this tells the coach -- prefixed
+  // only on the wire, so the visible thread still shows the plain question.
+  let sent = q;
+  if(pendingRefreshNote){
+    sent = `[[context refreshed since earlier turns in this thread -- treat `
+      + `the CONTEXT section above as authoritative over any numbers `
+      + `mentioned earlier in this conversation]]\n\n${q}`;
+    pendingRefreshNote = false;
+  }
+  history.push({role:'user', content:sent}); saveHistory();
   const out = bubble('bot','<span style="color:var(--muted)">thinking…</span>');
   let acc='';
   try{
@@ -1003,7 +1035,7 @@ $('#clearchat').onclick = () => {
 };
 $('#send').onclick = send;
 $('#q').addEventListener('keydown', e => {
-  if(e.key==='Enter' && (e.metaKey||e.ctrlKey)){ e.preventDefault(); send(); }
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }
 });
 
 load();

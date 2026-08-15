@@ -422,8 +422,16 @@ def build_payload():
                            "activities": r.get("activities")}
                for r in dated}
 
+    context_path = os.path.join(ROOT, "context.md")
     return {
         "generated": dt.datetime.now().isoformat(timespec="seconds"),
+        # When this last changed, not when this request ran -- it only moves
+        # when build.py rewrites context.md, which is the one event that can
+        # make an earlier chat turn's numbers stale. The chat UI diffs this
+        # against what it saw last time to warn before the coach reasons from
+        # a mix of a fresh CONTEXT block and a stale opinion sitting above it.
+        "context_mtime": (os.path.getmtime(context_path)
+                          if os.path.exists(context_path) else None),
         "today": dt.date.today().isoformat(),
         "config": CFG,
         "plan_name": os.path.basename(pp) if pp else None,
