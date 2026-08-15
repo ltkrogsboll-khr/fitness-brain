@@ -9,9 +9,11 @@ Endpoints
     GET  /api/data         daily + sessions + derived series as JSON
     POST /api/journal      append a line to journal.md
     POST /api/build        re-run build.py
-    POST /api/chat         SSE stream from Claude, with policy+context injected
+    POST /api/chat         SSE stream from the configured LLM provider,
+                            with policy+context injected
 
-Binds to 127.0.0.1 only. Needs ANTHROPIC_API_KEY in the environment for chat;
+Binds to 127.0.0.1 only. Needs an API key in the environment for chat (which
+provider, and which env var, come from config.coach.llm -- see llm.py);
 everything else works without it.
 """
 
@@ -27,16 +29,28 @@ import datetime as dt
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
+import llm
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("PORT", "8765"))
-MODEL = "claude-opus-5"
-KEYCHAIN_SERVICE = "anthropic-api-key"
 
 CFG = config.load()
 
 
-def resolve_api_key():
+# Pre-multi-provider installs stored the (always-Anthropic) key under this
+# fixed name. Kept as a read-only fallback so upgrading doesn't strand a key
+# someone already stored with `--set-key` before this existed.
+LEGACY_KEYCHAIN_SERVICE = "anthropic-api-key"
+
+
+def keychain_service(env_name):
+    """One Keychain entry per env-var name, so keys for different providers
+    (or a provider you later switch away from) don't collide or overwrite
+    each other."""
+    return f"llm-key-{env_name.lower().replace('_', '-')}"
+
+
+def resolve_api_key(env_name):
     """Find the API key without needing an export in every shell.
 
     Order: environment -> .env -> macOS Keychain.
@@ -45,7 +59,7 @@ def resolve_api_key():
     typically inside iCloud Drive; a plaintext .env there would be uploaded to
     Apple and synced to every device. The Keychain stays local to this Mac.
     """
-    k = os.environ.get("ANTHROPIC_API_KEY")
+    k = os.environ.get(env_name)
     if k:
         return k, "environment"
 
@@ -56,36 +70,47 @@ def resolve_api_key():
             if line.startswith("#") or "=" not in line:
                 continue
             name, _, val = line.partition("=")
-            if name.strip() == "ANTHROPIC_API_KEY":
+            if name.strip() == env_name:
                 val = val.strip().strip('"').strip("'")
                 if val:
-                    os.environ["ANTHROPIC_API_KEY"] = val
+                    os.environ[env_name] = val
                     return val, ".env"
 
     if sys.platform == "darwin":
-        try:
-            r = subprocess.run(
-                ["security", "find-generic-password",
-                 "-a", os.environ.get("USER", ""), "-s", KEYCHAIN_SERVICE, "-w"],
-                capture_output=True, text=True, timeout=10)
-            if r.returncode == 0 and r.stdout.strip():
-                val = r.stdout.strip()
-                os.environ["ANTHROPIC_API_KEY"] = val
-                return val, "macOS Keychain"
-        except (OSError, subprocess.SubprocessError):
-            pass
+        services = [keychain_service(env_name)]
+        if env_name == "ANTHROPIC_API_KEY":
+            services.append(LEGACY_KEYCHAIN_SERVICE)
+        for service in services:
+            try:
+                r = subprocess.run(
+                    ["security", "find-generic-password",
+                     "-a", os.environ.get("USER", ""), "-s", service, "-w"],
+                    capture_output=True, text=True, timeout=10)
+                if r.returncode == 0 and r.stdout.strip():
+                    val = r.stdout.strip()
+                    os.environ[env_name] = val
+                    return val, "macOS Keychain"
+            except (OSError, subprocess.SubprocessError):
+                pass
 
     return None, None
 
 
 def store_key_in_keychain():
-    """`python serve.py --set-key` -- prompt once, store in the login Keychain."""
+    """`python serve.py --set-key` -- prompt once, store in the login Keychain.
+
+    Reads the provider/model/env-var name from config.coach.llm, so this
+    validates and stores a key for whichever LLM is actually configured, not
+    always Anthropic.
+    """
     import getpass
+    provider, base_url, model, env_name = llm.resolve(CFG)
+    service = keychain_service(env_name)
     if sys.platform != "darwin":
         print("Keychain storage is macOS-only. Use a .env file instead:")
-        print(f"  echo 'ANTHROPIC_API_KEY=sk-ant-...' > {os.path.join(ROOT, '.env')}")
+        print(f"  echo '{env_name}=...' > {os.path.join(ROOT, '.env')}")
         return 1
-    key = getpass.getpass("Paste your Anthropic API key (hidden): ")
+    key = getpass.getpass(f"Paste your {env_name} API key (hidden): ")
     # Hidden input makes mistakes invisible, so clean and check before storing.
     key = "".join(key.split())  # strip spaces/newlines anywhere
     if not key:
@@ -96,31 +121,24 @@ def store_key_in_keychain():
     if len(key) % 2 == 0 and key[:half] == key[half:]:
         key = key[:half]
         print("Noticed the key was pasted twice — using a single copy.")
-    if not key.startswith("sk-ant-"):
-        print(f"Warning: keys normally start with 'sk-ant-'; got '{key[:7]}…'.")
 
-    print("Checking the key against the API…")
+    print(f"Checking the key against {base_url} ({provider})…")
     try:
-        import anthropic
-        anthropic.Anthropic(api_key=key).messages.create(
-            model=MODEL, max_tokens=8,
-            messages=[{"role": "user", "content": "hi"}])
+        llm.check_key(provider, base_url, key, model)
         print("Key works.")
-    except ImportError:
-        print("(anthropic SDK not installed — storing without checking.)")
     except Exception as e:
-        print(f"Key rejected: {type(e).__name__}: {e}")
-        print("Not stored. Re-copy the key from console.anthropic.com and retry.")
+        print(f"Key rejected: {e}")
+        print("Not stored. Re-copy the key and retry.")
         return 1
     r = subprocess.run(
         ["security", "add-generic-password",
-         "-a", os.environ.get("USER", ""), "-s", KEYCHAIN_SERVICE,
+         "-a", os.environ.get("USER", ""), "-s", service,
          "-w", key, "-U"],
         capture_output=True, text=True)
     if r.returncode != 0:
         print("Keychain write failed:", (r.stderr or "").strip())
         return 1
-    print(f"Stored in the login Keychain as '{KEYCHAIN_SERVICE}'.")
+    print(f"Stored in the login Keychain as '{service}'.")
     print("Run ./run.sh -- no export needed. macOS will ask once for permission;")
     print("choose 'Always Allow' so it stops asking.")
     return 0
@@ -463,7 +481,7 @@ def build_payload():
         },
         "journal": journal[-40:],
         "context_md": read("context.md"),
-        "has_key": bool(resolve_api_key()[0]),
+        "has_key": bool(resolve_api_key(llm.resolve(CFG)[3])[0]),
     }
 
 
@@ -593,16 +611,19 @@ class Handler(BaseHTTPRequestHandler):
         return {"file": rel, "replaced": existed, "has_fence": has_fence}
 
     def chat(self, body):
-        if not resolve_api_key()[0]:
+        provider, base_url, model, env_name = llm.resolve(CFG)
+        stream_fn = llm.STREAM.get(provider)
+        if stream_fn is None:
             return self._send(200, {"error":
-                "No API key found. Get one at console.anthropic.com, then store "
-                "it once:\n\n  ./.venv/bin/python serve.py --set-key\n\n"
-                "and restart with ./run.sh — no export needed after that."})
-        try:
-            import anthropic
-        except ImportError:
+                f"config.coach.llm.provider must be 'anthropic' or 'openai' "
+                f"(got {provider!r})."})
+
+        key, _src = resolve_api_key(env_name)
+        if not key:
             return self._send(200, {"error":
-                "anthropic SDK missing. Run: ./.venv/bin/pip install anthropic"})
+                f"No {env_name} found. Get a key from your provider, then "
+                f"store it once:\n\n  ./.venv/bin/python serve.py --set-key\n\n"
+                f"and restart with ./run.sh — no export needed after that."})
 
         msgs = body.get("messages") or []
         if not msgs:
@@ -614,16 +635,11 @@ class Handler(BaseHTTPRequestHandler):
             if os.path.isdir(os.path.join(ROOT, "plans")) else []
         latest_plan = read(f"plans/{plans[-1]}") if plans else "(none yet)"
 
-        system = [{
-            "type": "text",
-            "text": (f"{build_preamble(CFG)}\n\n"
-                     f"===== POLICY (binding) =====\n{read('policy.md')}\n\n"
-                     f"===== CONTEXT (generated) =====\n{read('context.md')}\n\n"
-                     f"===== LATEST PLAN =====\n{latest_plan}\n\n"
-                     f"===== JOURNAL =====\n{journal}\n"),
-            # Stable prefix across turns -- cache it.
-            "cache_control": {"type": "ephemeral"},
-        }]
+        system_text = (f"{build_preamble(CFG)}\n\n"
+                        f"===== POLICY (binding) =====\n{read('policy.md')}\n\n"
+                        f"===== CONTEXT (generated) =====\n{read('context.md')}\n\n"
+                        f"===== LATEST PLAN =====\n{latest_plan}\n\n"
+                        f"===== JOURNAL =====\n{journal}\n")
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -635,29 +651,16 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
-            client = anthropic.Anthropic()
-            with client.messages.stream(
-                model=MODEL,
-                max_tokens=16000,
-                thinking={"type": "adaptive"},
-                output_config={"effort": "high"},
-                system=system,
-                messages=[{"role": m["role"], "content": m["content"]}
-                          for m in msgs],
-            ) as stream:
-                for ev in stream:
-                    if ev.type == "content_block_delta":
-                        if ev.delta.type == "text_delta":
-                            emit({"t": ev.delta.text})
-                final = stream.get_final_message()
-                if final.stop_reason == "refusal":
-                    emit({"t": "\n\n_(response stopped: refusal)_"})
+            reply, stop_reason, usage_in, usage_out = stream_fn(
+                base_url, key, model, system_text,
+                [{"role": m["role"], "content": m["content"]} for m in msgs],
+                lambda chunk: emit({"t": chunk}))
+            if stop_reason in llm.REFUSAL_REASONS:
+                emit({"t": f"\n\n_(response stopped: {stop_reason})_"})
 
-                reply = "".join(b.text for b in final.content if b.type == "text")
-                logged, planned = self.persist_turn(msgs[-1]["content"], reply)
-                emit({"done": True, "journal": logged, "plan": planned,
-                      "usage": {"in": final.usage.input_tokens,
-                                "out": final.usage.output_tokens}})
+            logged, planned = self.persist_turn(msgs[-1]["content"], reply)
+            emit({"done": True, "journal": logged, "plan": planned,
+                  "usage": {"in": usage_in, "out": usage_out}})
         except BrokenPipeError:
             pass
         except Exception as e:  # surface the real error in the UI
@@ -672,12 +675,13 @@ if __name__ == "__main__":
         raise SystemExit(store_key_in_keychain())
 
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    key, src = resolve_api_key()
+    provider, base_url, model, env_name = llm.resolve(CFG)
+    key, src = resolve_api_key(env_name)
     status = f"found via {src}" if key else \
         "MISSING — chat disabled. Run: ./.venv/bin/python serve.py --set-key"
     print(f"  dashboard  http://127.0.0.1:{PORT}")
-    print(f"  model      {MODEL}")
-    print(f"  api key    {status}")
+    print(f"  model      {model} ({provider} @ {base_url})")
+    print(f"  api key    {env_name}: {status}")
     print("  ctrl-c to stop")
     try:
         srv.serve_forever()

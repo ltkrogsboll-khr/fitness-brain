@@ -2,9 +2,10 @@
 
 A local training system: read what a watch exported, accumulate it, and give a
 coach enough grounded context to plan the next block. Python 3, **standard
-library only** — `anthropic` is installed for the chat and is the sole
-dependency. Keep it that way; if something seems to need a package, that is
-worth raising rather than doing quietly.
+library only, zero dependencies** — the chat talks to whatever LLM provider
+`config.coach.llm` points at over raw HTTP (`llm.py`), not a vendor SDK. Keep
+it that way; if something seems to need a package, that is worth raising
+rather than doing quietly.
 
 ## The one boundary that matters
 
@@ -40,6 +41,7 @@ per file.
 | `build.py` | Dedupe → derive → emit. Owns TRIMP, ACWR and the upsert |
 | `analyze.py` | One session at full resolution → session fields + a journal line |
 | `serve.py` | Dashboard, chat proxy, and the coach's system prompt |
+| `llm.py` | Raw-HTTP client for the coach's LLM — the Anthropic and OpenAI-compatible request/response shapes, and provider defaults |
 | `config.py` | `DEFAULTS`, merged under the user's `config.json` |
 
 ## Units are the contract

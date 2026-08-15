@@ -267,6 +267,24 @@ DEFAULTS = {
         "journal_examples": "how a session actually felt, next-morning symptoms, "
                             "a life event affecting training, equipment changes, "
                             "a goal change",
+
+        # Which LLM answers, and how to reach it -- see llm.py. `provider`
+        # picks a request/response *shape*, not literally who's hosting it:
+        # "anthropic" is the Messages API, "openai" is the Chat Completions
+        # API that OpenAI itself, Ollama, LM Studio and most gateways all
+        # speak. Blank `base_url` / `api_key_env` fall back to the shape's
+        # own default (api.anthropic.com / ANTHROPIC_API_KEY, or
+        # api.openai.com / OPENAI_API_KEY) -- set them to point anywhere
+        # else, e.g. a local model:
+        #   "provider": "openai", "model": "llama3.1",
+        #   "base_url": "http://localhost:11434/v1"
+        # (Ollama ignores the key entirely, so any placeholder in .env works.)
+        "llm": {
+            "provider": "anthropic",
+            "model": "claude-opus-5",
+            "base_url": "",
+            "api_key_env": "",
+        },
     },
 }
 

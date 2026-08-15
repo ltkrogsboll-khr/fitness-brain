@@ -873,7 +873,7 @@ function render(){
   $('#jlist').innerHTML = D.journal.slice().reverse()
     .map(l=>`<div>${l.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`).join('');
   $('#hint').innerHTML = D.has_key ? '' :
-    '<span class="err">Chat disabled — no API key found. Get one at console.anthropic.com, then run '
+    '<span class="err">Chat disabled — no API key found. Run '
     + '<code>./.venv/bin/python serve.py --set-key</code> once and restart with <code>./run.sh</code>.</span>';
 }
 

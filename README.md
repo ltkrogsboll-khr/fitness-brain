@@ -13,13 +13,15 @@ and a coach chat that reads your policy on every turn.
 cp policy.example.md policy.md           # the rules — rewrite for yourself
 cp config.example.json config.json       # the numbers — or delete for neutral defaults
 ./run.sh                                 # → http://127.0.0.1:8765
-./.venv/bin/python serve.py --set-key    # one-time: store Anthropic key in Keychain
+./.venv/bin/python serve.py --set-key    # one-time: store your LLM's API key in Keychain
 ```
 
-Everything except the chat works without a key. `serve.py` resolves the key from
-`ANTHROPIC_API_KEY`, then `.env`, then the macOS login Keychain — Keychain is
-recommended, since this directory may sit in iCloud Drive where a plaintext `.env`
-would sync off the machine.
+Everything except the chat works without a key. The default coach talks to
+Anthropic, so `serve.py` resolves the key from `ANTHROPIC_API_KEY`, then
+`.env`, then the macOS login Keychain — Keychain is recommended, since this
+directory may sit in iCloud Drive where a plaintext `.env` would sync off the
+machine. Both the provider and the env var name are configurable; see
+[Choosing the coach's LLM](#choosing-the-coachs-llm).
 
 **About your data source:** the shipped adapter reads Garmin-shaped CSV, and
 config alone covers most other CSV exporters too — but if yours is shaped
@@ -50,11 +52,47 @@ the page and the policy from quoting different ceilings at you.
 | `journal` | The fields you score yourself on |
 | `plan` | Session kinds, and how each decides it was done |
 | `source` | Which ingest adapter reads `data/raw/`, and everything it needs to know — filenames, columns, date and duration formats, decimals, units. See [Using a different export](#using-a-different-export) |
-| `coach` | What the coach calls itself, and its escalation rule |
+| `coach` | What the coach calls itself, its escalation rule, and which LLM answers. See [Choosing the coach's LLM](#choosing-the-coachs-llm) |
 
 Anything you leave out falls back to a neutral default, so a partial config is
 fine. With no `config.json` at all you get a generic HR-based setup: one load
 channel, no form metric, one soreness field.
+
+## Choosing the coach's LLM
+
+The chat isn't wired to one vendor. `serve.py` talks to whatever
+`config.coach.llm` points at over plain HTTP (`llm.py`) — no SDK, so there's
+nothing to install per provider. Four keys, all optional:
+
+| Key | Default | What it does |
+|---|---|---|
+| `provider` | `"anthropic"` | Which request/response *shape* to speak: `"anthropic"` (the Messages API) or `"openai"` (the Chat Completions API — also what Ollama, LM Studio and most gateways speak) |
+| `model` | `"claude-opus-5"` | The model name to send |
+| `base_url` | provider's own API | Where to send it. Set this to point at OpenAI, a gateway, or a local server |
+| `api_key_env` | provider's own env var | Which environment variable `--set-key` and `serve.py` read the key from |
+
+The default reproduces today's Anthropic setup exactly. To switch:
+
+```json
+"coach": {
+  "llm": { "provider": "openai", "model": "gpt-5" }
+}
+```
+
+Or point at a model running on your own machine — Ollama speaks the same
+shape as OpenAI's API:
+
+```json
+"coach": {
+  "llm": { "provider": "openai", "model": "llama3.1",
+           "base_url": "http://localhost:11434/v1", "api_key_env": "OLLAMA_KEY" }
+}
+```
+
+Ollama doesn't check the key at all, so any placeholder in `.env` works —
+`echo 'OLLAMA_KEY=local' > .env` is enough. `serve.py --set-key` stores a key
+per env var name, so switching providers back and forth doesn't overwrite one
+you've already saved.
 
 ## The loop
 
@@ -185,6 +223,7 @@ says so rather than letting the load quietly double.
 | `build.py` | Dedupe → derive → emit, over whatever `ingest/` returns. Stdlib only |
 | `analyze.py` | One activity, second by second, from its `.fit` file |
 | `serve.py` | Local dashboard + chat proxy. Binds 127.0.0.1 only |
+| `llm.py` | Raw-HTTP client for the coach's LLM — see [Choosing the coach's LLM](#choosing-the-coachs-llm) |
 | `index.html` | The whole frontend. No build step, no CDN |
 | `config.py` | Defaults, and the merge that makes `config.json` optional |
 | `run.sh` | Starts the server |
@@ -263,7 +302,9 @@ rowing. TRIMP needs an HR stream, so strength-only training has no aerobic load 
 model.
 
 **This is not medical advice.** It's a tool for organising your own training data
-against rules you wrote yourself. Pain that is worsening, focal, or present at rest
-belongs with a clinician, not a dashboard.
+against rules you wrote yourself, using an LLM you choose and configure yourself
+— it can give wrong or incomplete advice, same as any LLM. Pain that is worsening,
+focal, or present at rest, or any other concerning symptom, belongs with a
+clinician — not a dashboard, and not a chat with the coach.
 
 MIT licensed — see [LICENSE](LICENSE).
