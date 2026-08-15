@@ -105,6 +105,12 @@ def store_key_in_keychain():
     """
     import getpass
     provider, base_url, model, env_name = llm.resolve(CFG)
+    if not provider or not model:
+        print("No coach.llm.provider/model set in config.json yet. Add one, e.g.:\n")
+        print('  "coach": { "llm": { "provider": "anthropic", "model": "claude-opus-5" } }\n')
+        print("(\"provider\": \"openai\" also covers OpenAI, Ollama, and most gateways.)")
+        print("See README > Choosing the coach's LLM.")
+        return 1
     service = keychain_service(env_name)
     if sys.platform != "darwin":
         print("Keychain storage is macOS-only. Use a .env file instead:")
@@ -614,6 +620,11 @@ class Handler(BaseHTTPRequestHandler):
         provider, base_url, model, env_name = llm.resolve(CFG)
         stream_fn = llm.STREAM.get(provider)
         if stream_fn is None:
+            if not provider:
+                return self._send(200, {"error":
+                    "No LLM configured. Set config.coach.llm.provider (\"anthropic\" "
+                    "or \"openai\") and .model in config.json — see README > "
+                    "Choosing the coach's LLM."})
             return self._send(200, {"error":
                 f"config.coach.llm.provider must be 'anthropic' or 'openai' "
                 f"(got {provider!r})."})
@@ -676,12 +687,16 @@ if __name__ == "__main__":
 
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     provider, base_url, model, env_name = llm.resolve(CFG)
-    key, src = resolve_api_key(env_name)
-    status = f"found via {src}" if key else \
-        "MISSING — chat disabled. Run: ./.venv/bin/python serve.py --set-key"
     print(f"  dashboard  http://127.0.0.1:{PORT}")
-    print(f"  model      {model} ({provider} @ {base_url})")
-    print(f"  api key    {env_name}: {status}")
+    if not provider:
+        print("  model      not configured — chat disabled. Set config.coach.llm")
+        print("             (see README > Choosing the coach's LLM)")
+    else:
+        key, src = resolve_api_key(env_name)
+        status = f"found via {src}" if key else \
+            "MISSING — chat disabled. Run: ./.venv/bin/python serve.py --set-key"
+        print(f"  model      {model} ({provider} @ {base_url})")
+        print(f"  api key    {env_name}: {status}")
     print("  ctrl-c to stop")
     try:
         srv.serve_forever()

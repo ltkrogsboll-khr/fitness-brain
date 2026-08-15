@@ -12,15 +12,17 @@ and a coach chat that reads your policy on every turn.
 ```sh
 cp policy.example.md policy.md           # the rules — rewrite for yourself
 cp config.example.json config.json       # the numbers — or delete for neutral defaults
+# pick a coach LLM in config.json (see "Choosing the coach's LLM" below) —
+# nothing is assumed for you
 ./run.sh                                 # → http://127.0.0.1:8765
 ./.venv/bin/python serve.py --set-key    # one-time: store your LLM's API key in Keychain
 ```
 
-Everything except the chat works without a key. The default coach talks to
-Anthropic, so `serve.py` resolves the key from `ANTHROPIC_API_KEY`, then
-`.env`, then the macOS login Keychain — Keychain is recommended, since this
-directory may sit in iCloud Drive where a plaintext `.env` would sync off the
-machine. Both the provider and the env var name are configurable; see
+Everything except the chat works without a key or a chosen LLM. Once you've
+set `config.coach.llm`, `serve.py` resolves the key from that provider's env
+var, then `.env`, then the macOS login Keychain — Keychain is recommended,
+since this directory may sit in iCloud Drive where a plaintext `.env` would
+sync off the machine. See
 [Choosing the coach's LLM](#choosing-the-coachs-llm).
 
 **About your data source:** the shipped adapter reads Garmin-shaped CSV, and
@@ -60,18 +62,29 @@ channel, no form metric, one soreness field.
 
 ## Choosing the coach's LLM
 
-The chat isn't wired to one vendor. `serve.py` talks to whatever
-`config.coach.llm` points at over plain HTTP (`llm.py`) — no SDK, so there's
-nothing to install per provider. Four keys, all optional:
+The chat isn't wired to one vendor — and unlike most of `config.json`, this
+section has no default at all. Nothing ships preferring one LLM over another;
+until you set `provider` and `model`, chat stays disabled (everything else
+still works). `serve.py` talks to whatever `config.coach.llm` points at over
+plain HTTP (`llm.py`) — no SDK, so there's nothing to install per provider.
+Four keys:
 
-| Key | Default | What it does |
+| Key | Required | What it does |
 |---|---|---|
-| `provider` | `"anthropic"` | Which request/response *shape* to speak: `"anthropic"` (the Messages API) or `"openai"` (the Chat Completions API — also what Ollama, LM Studio and most gateways speak) |
-| `model` | `"claude-opus-5"` | The model name to send |
-| `base_url` | provider's own API | Where to send it. Set this to point at OpenAI, a gateway, or a local server |
-| `api_key_env` | provider's own env var | Which environment variable `--set-key` and `serve.py` read the key from |
+| `provider` | yes | Which request/response *shape* to speak: `"anthropic"` (the Messages API) or `"openai"` (the Chat Completions API — also what Ollama, LM Studio and most gateways speak) |
+| `model` | yes | The model name to send |
+| `base_url` | no — defaults to the shape's own API | Where to send it. Set this to point at OpenAI, a gateway, or a local server |
+| `api_key_env` | no — defaults to the shape's own env var | Which environment variable `--set-key` and `serve.py` read the key from |
 
-The default reproduces today's Anthropic setup exactly. To switch:
+For Anthropic:
+
+```json
+"coach": {
+  "llm": { "provider": "anthropic", "model": "claude-opus-5" }
+}
+```
+
+Or OpenAI:
 
 ```json
 "coach": {

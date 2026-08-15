@@ -27,22 +27,21 @@ PROVIDER_DEFAULTS = {
                "api_key_env": "OPENAI_API_KEY"},
 }
 
-DEFAULT_MODEL = "claude-opus-5"
-
-
 def resolve(cfg):
     """coach config -> (provider, base_url, model, api_key_env).
 
-    Blank fields fall back to the shape's own default, so setting only
-    `model` in config.json (say, to point at a different Anthropic model)
-    doesn't require repeating the base_url or key env name too.
+    No vendor is assumed: an unset `provider` resolves to "" and every other
+    field resolves blank with it, rather than quietly picking a default LLM.
+    Once `provider` is set, blank `base_url` / `api_key_env` fall back to
+    that shape's own default, so setting only `model` (say, to point at a
+    different Anthropic model) doesn't require repeating the rest.
     """
     c = cfg["coach"].get("llm", {})
-    provider = c.get("provider") or "anthropic"
-    d = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
-    base_url = (c.get("base_url") or d["base_url"]).rstrip("/")
-    api_key_env = c.get("api_key_env") or d["api_key_env"]
-    model = c.get("model") or DEFAULT_MODEL
+    provider = c.get("provider") or ""
+    d = PROVIDER_DEFAULTS.get(provider, {})
+    base_url = (c.get("base_url") or d.get("base_url", "")).rstrip("/")
+    api_key_env = c.get("api_key_env") or d.get("api_key_env", "")
+    model = c.get("model") or ""
     return provider, base_url, model, api_key_env
 
 
