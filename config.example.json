@@ -91,6 +91,7 @@
     "placeholder": "note — cadence, how it felt, next-morning shins…"
   },
 
+  "_plan_comment": "complete_when says what proves a day happened: primary_volume (distance in your main sport), any_activity, activity_matches (names in `match`), untracked, always. Use `untracked` for work you do but never log — the day stays in the plan as a reminder, and is left unmarked and out of the session count, because no export will ever say whether it happened. `always` is for days with nothing to do at all.",
   "plan": {
     "kinds": {
       "run": { "label": "RUN", "complete_when": "primary_volume" },
@@ -100,6 +101,7 @@
         "complete_when": "activity_matches",
         "match": ["other", "floor", "strength"]
       },
+      "commute": { "label": "COMMUTE", "complete_when": "untracked" },
       "rest": { "label": "REST", "complete_when": "always" }
     }
   },

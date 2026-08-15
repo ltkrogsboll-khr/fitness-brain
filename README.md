@@ -73,6 +73,23 @@ starting on any weekday. Kinds come from `config.plan.kinds`. Completion is
 inferred from what actually got logged, not ticked by hand. (` ```week ` is the
 original fence name and still parses, so old plans keep rendering.)
 
+Each kind says what counts as evidence, via `complete_when`:
+
+| `complete_when` | A day is done when |
+|---|---|
+| `primary_volume` | Any distance in your main sport landed |
+| `any_activity` | Anything at all landed |
+| `activity_matches` | A logged activity's name contains one of `match` |
+| `untracked` | Never asked — no export will ever mention it |
+| `always` | Always — there was nothing to do |
+
+`untracked` is the one worth knowing about. A 12-minute floor set or a bike
+commute you never log would otherwise go red on the strip every week, and a
+reminder that reads as a failure gets deleted. Those days stay in the plan and
+are simply left alone: no tick, no **missed**, and out of the session count,
+which then speaks only for days the data can actually speak for. The coach is
+told the kind is untracked too, so it plans them without chasing you for a file.
+
 ## Cycle length
 
 `config.cycle.days` is one training block, and it's a display and volume-window

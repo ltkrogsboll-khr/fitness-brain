@@ -538,7 +538,12 @@ function tile(c){
     <div class="note">${c.note||''}</div></div>`;
 }
 const kindLabel = k => (C.plan.kinds[k]||{}).label || (k||'').toUpperCase();
-const isRest = k => (C.plan.kinds[k]||{}).complete_when === 'always';
+/* Two kinds of day the data can't speak for: rest, where there was nothing to
+   do, and untracked, where there was something to do that no export will ever
+   mention. Neither can be ticked or missed, and neither belongs in a count of
+   what got logged — they are in the plan to be read, not scored. */
+const isTracked = k => !['always','untracked']
+  .includes((C.plan.kinds[k]||{}).complete_when);
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function dayName(iso){
   const [y,m,d] = iso.split('-').map(Number);
@@ -736,8 +741,8 @@ function renderPlan(){
         <div class="how">${sel.detail||''}</div>
       </div>
       <div style="text-align:right;white-space:nowrap">
-        ${sel.done && !isRest(sel.kind)
-          ? '<span class="chk ok">✓ logged</span>'
+        ${!isTracked(sel.kind) ? ''
+          : sel.done ? '<span class="chk ok">✓ logged</span>'
           : '<span style="color:var(--muted);font-size:12px">not logged yet</span>'}
         ${logged}
         ${sel.date !== fallback.date
@@ -748,15 +753,15 @@ function renderPlan(){
   const back = $('#backtoday');
   if(back) back.onclick = () => { picked = null; renderPlan(); };
 
-  const sessions = wk.filter(d => !isRest(d.kind));
+  const sessions = wk.filter(d => isTracked(d.kind));
   const doneN = sessions.filter(d => d.done).length;
-  const left = wk.filter(d => d.date > t && !isRest(d.kind)).length;
+  const left = wk.filter(d => d.date > t && isTracked(d.kind)).length;
   $('#plancnt').textContent =
     `${doneN}/${sessions.length} sessions logged · ${left} still ahead`;
 
   $('#strip').innerHTML = wk.map(d=>{
     const past = d.date < t, isToday = d.date === t;
-    const mark = isRest(d.kind) ? ''
+    const mark = !isTracked(d.kind) ? ''
       : d.done ? '<span class="chk ok">✓</span>'
       : past ? '<span class="chk miss">missed</span>' : '';
     return `<button type="button" class="day ${isToday?'is-today':''} ${

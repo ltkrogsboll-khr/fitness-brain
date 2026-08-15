@@ -158,7 +158,13 @@ DEFAULTS = {
         # Kinds usable in a plan's ```cycle block (```week is the old fence
         # name and still parses), and how each one decides it was done.
         # complete_when: primary_volume | any_activity |
-        # activity_matches (with `match`) | always
+        # activity_matches (with `match`) | untracked | always
+        #
+        # `untracked` is for work you do but never record -- a floor session, a
+        # bike commute. The day stays in the plan as a reminder and is left
+        # unmarked and uncounted: no export will ever mention it, so ticking it
+        # and missing it are both claims the data can't support. Use `always`
+        # only for days with nothing to do at all.
         "kinds": {
             "work": {"label": "WORK", "complete_when": "any_activity"},
             "rest": {"label": "REST", "complete_when": "always"},

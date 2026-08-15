@@ -133,7 +133,12 @@ def build_preamble(cfg):
     c = cfg["coach"]
     safety = f"\nSafety: {c['safety'].strip()}\n" if c.get("safety", "").strip() else ""
     fields = ", ".join(f["key"] for f in cfg["journal"]["fields"]) or "none"
-    kinds = ", ".join(cfg["plan"]["kinds"]) or "work, rest"
+    # Kinds the athlete has declared untracked are named as such, so the coach
+    # plans them freely without later reading their silence as a skipped day.
+    kinds = ", ".join(
+        f"{k} (untracked -- no data will ever exist for it either way)"
+        if s.get("complete_when") == "untracked" else k
+        for k, s in cfg["plan"]["kinds"].items()) or "work, rest"
     return f"""You are the athlete's {c['role']} for {c['system']}.
 
 Below are three documents. Treat them as authoritative:
@@ -248,7 +253,8 @@ def parse_plan_days(md, by_date):
     Any number of days, any start weekday -- the block is read as the list of
     dates it actually contains, not as a week. `done` is inferred from what
     actually got logged that day, so the strip ticks itself off as new data
-    lands -- nothing to check by hand.
+    lands -- nothing to check by hand. `done` is None where that inference has
+    nothing to work with because the day was never going to be exported.
     """
     out, inside = [], False
     for line in md.splitlines():
@@ -280,11 +286,18 @@ def parse_plan_days(md, by_date):
             done = any(w.lower() in acts for w in spec.get("match", []))
         elif rule == "always":
             done = True          # rest days need nothing
+        elif rule == "untracked":
+            # Work the athlete does but never records -- a floor set, a bike
+            # commute. No export will ever mention it either way, so `done` is
+            # not False and not True: it is unknown, and saying so is what
+            # stops the day being read as a skipped one.
+            done = None
         else:
             done = trimp > 0 or bool(acts)
 
         out.append({"date": date, "kind": kind, "title": title,
-                    "detail": detail, "done": bool(done),
+                    "detail": detail,
+                    "done": None if done is None else bool(done),
                     "logged": d.get("activities") or "",
                     "primary_km": prim or None})
     return out
