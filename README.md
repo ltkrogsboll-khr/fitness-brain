@@ -142,6 +142,7 @@ What it derives, per session, beyond what any summary row can hold:
 | Field | What it answers |
 |---|---|
 | `moving_cadence`, `moving_avg_hr`, `moving_pace_s_per_km` | What you did while doing it, walking excluded |
+| `moving_distance_km` | Distance covered while actually moving, walking excluded |
 | `pct_above_hr_cap` | How much of the session broke the prescribed ceiling |
 | `cadence_in_band_pct` | Adherence to a cadence target, not just its mean |
 | `hr_drift_bpm`, `decoupling_pct` | Whether HR rose because you tired or because you sped up — a distinction a mean destroys |
@@ -150,9 +151,13 @@ What it derives, per session, beyond what any summary row can hold:
 Where it goes:
 
 - **Numbers** → extra columns on the session row in `data/sessions.csv`. The
-  ingest schema keeps unknown session fields, so this needs no engine change,
-  and any of them can become `config.form_metric.field` — making
+  ingest schema keeps unknown session fields, so most of this needs no engine
+  change, and any of them can become `config.form_metric.field` — making
   `moving_cadence` the tracked number instead of the walk-diluted `cadence`.
+  The load numbers are the exception: `build.py`'s TRIMP and mechanical-km
+  calculations prefer `moving_time_s` / `moving_avg_hr` / `moving_distance_km`
+  over the vendor's whole-activity totals whenever a session has them, so a
+  walked warm-up or cooldown doesn't inflate load either.
 - **Prose** → one line in `journal.md`, which `build.py` folds into `context.md`
   and `serve.py` injects into every coach conversation. So a dropped file
   reaches the next planning conversation without anyone typing it. The line

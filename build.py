@@ -49,8 +49,17 @@ MISSING = set(CFG["source"]["missing"]) | {""}
 
 
 # --- Load model --------------------------------------------------------------
-def trimp(duration_s, avg_hr, hr_rest, hr_max):
-    """Banister TRIMP -- one uniform aerobic-load currency across all activity types."""
+def trimp(a, hr_rest, hr_max):
+    """Banister TRIMP -- one uniform aerobic-load currency across all activity types.
+
+    Prefers moving_time_s/moving_avg_hr when the row has them (a .fit-derived
+    session): the vendor's whole-activity duration_s/avg_hr average in a
+    warm-up or cooldown walk, which is walking's HR and duration counted as
+    training load. Bulk-CSV rows never carry moving_* fields, so they fall
+    through to the vendor totals unchanged.
+    """
+    duration_s = a.get("moving_time_s") or a.get("duration_s")
+    avg_hr = a.get("moving_avg_hr") or a.get("avg_hr")
     if not duration_s or not avg_hr or not hr_max or hr_max <= hr_rest:
         return None
     hrr = (avg_hr - hr_rest) / (hr_max - hr_rest)
@@ -59,9 +68,15 @@ def trimp(duration_s, avg_hr, hr_rest, hr_max):
 
 
 def mech_km(a):
-    """Weighted distance for the second load channel -- 0 when it's disabled."""
+    """Weighted distance for the second load channel -- 0 when it's disabled.
+
+    Prefers moving_distance_km over distance_km for the same reason trimp()
+    prefers the moving fields: a walked warm-up shouldn't count as mechanical
+    load distance.
+    """
     w = CFG["mechanical"]["weights"].get(a["type"], 0.0)
-    return round((a["distance_km"] or 0.0) * w, 2) if w else 0.0
+    dist = a.get("moving_distance_km") or a.get("distance_km")
+    return round((dist or 0.0) * w, 2) if w else 0.0
 
 
 def is_primary(atype):
@@ -183,7 +198,7 @@ def main():
         else CFG["athlete"]["hr_rest_fallback"]
 
     for a in acts:
-        a["trimp"] = trimp(a["duration_s"], a["avg_hr"], hr_rest, hr_max)
+        a["trimp"] = trimp(a, hr_rest, hr_max)
         a["mech_km"] = mech_km(a)
 
     sess = upsert(SESSIONS, acts, ["datetime", "type"], drop=LEGACY_COLS)
@@ -351,6 +366,16 @@ def write_context(daily, sess, hr_rest, hr_max, today):
         L.append(f"\n{prim['label']} {prim['unit']} last {cyc}d: "
                  f"**{wsum(window(daily, end_d, cyc), 'primary_km')}**{cap}.")
     L.append(f"\nConstants: HR_rest={hr_rest}, HR_max={hr_max}.\n")
+
+    # Only some sessions have a .fit file behind them, and only those get the
+    # walk-corrected load. Say so once, rather than let the coach treat every
+    # TRIMP figure above as equally precise.
+    corrected = sum(1 for s in sess if s.get("moving_time_s"))
+    if corrected:
+        L.append(f"{corrected} of {len(sess)} sessions above have walk-corrected "
+                 f"load (from a .fit file, warm-up/cooldown walking excluded); "
+                 f"the rest use the vendor's whole-activity average, which a "
+                 f"walk can dilute.\n")
 
     L.append("## Readiness\n")
     L.append(f"- Night of {last.get('date')}: sleep score {last.get('sleep_score') or '--'}, "

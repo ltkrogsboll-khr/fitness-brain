@@ -30,11 +30,15 @@ same CSV row and completely different training.
 What it does with what it finds:
 
   numbers -> data/sessions.csv, as extra fields on the session row. The schema
-             keeps unknown session fields (ingest/schema.py), so they ride
-             through into context.md and the dashboard with no engine change,
-             and are nameable as config.form_metric.field — so `moving_cadence`
-             can become the tracked number instead of the walk-diluted
-             `cadence` the CSV supplies.
+             keeps unknown session fields (ingest/schema.py), so most of them
+             ride through into context.md and the dashboard with no engine
+             change, and are nameable as config.form_metric.field — so
+             `moving_cadence` can become the tracked number instead of the
+             walk-diluted `cadence` the CSV supplies. Three are the exception:
+             build.py's trimp() and mech_km() prefer moving_time_s /
+             moving_avg_hr / moving_distance_km over the vendor's
+             whole-activity totals when a row has them, so a walked warm-up
+             or cooldown doesn't inflate TRIMP or mechanical load either.
   prose   -> one line in journal.md, which build.py folds into context.md and
              serve.py injects into every coach conversation.
 
@@ -67,9 +71,9 @@ def readable():
 # Fields this script owns, named so they can't collide with the vendor's own
 # averages: `cadence` is what the CSV says, `moving_cadence` is what you did.
 DERIVED = ["moving_time_s", "moving_avg_hr", "moving_cadence",
-           "moving_pace_s_per_km", "hr_cap_used", "pct_above_hr_cap",
-           "cadence_in_band_pct", "hr_drift_bpm", "decoupling_pct",
-           "walk_break_s"]
+           "moving_pace_s_per_km", "moving_distance_km", "hr_cap_used",
+           "pct_above_hr_cap", "cadence_in_band_pct", "hr_drift_bpm",
+           "decoupling_pct", "walk_break_s"]
 
 
 def settings(cfg=None, hr_cap=None, cadence=None, band=None, floor=None):
@@ -134,11 +138,15 @@ def analyse(act, hr_cap=None, cadence=None, band=5, floor=140):
     cads = [r.get("cadence") for r in moving]
     spds = [r.get("speed") for r in moving]
 
-    out = {"moving_time_s": round(len(moving) * dt)}
+    moving_time = len(moving) * dt
+    out = {"moving_time_s": round(moving_time)}
     mh, mc, ms = _mean(hrs), _mean(cads), _mean(spds)
     out["moving_avg_hr"] = round(mh) if mh else None
     out["moving_cadence"] = round(mc) if mc else None
     out["moving_pace_s_per_km"] = round(1000.0 / ms) if ms else None
+    # Same mask as moving_time_s/moving_avg_hr, so a walk warm-up doesn't
+    # inflate the distance that feeds mech_km any more than it inflates HR.
+    out["moving_distance_km"] = round(moving_time * ms / 1000.0, 2) if ms else None
 
     # Adherence to the two things the plan actually asked for.
     if hr_cap:
@@ -457,7 +465,7 @@ def analyse_one(path, a, cfg):
     hr_rest = round(sum(rhrs) / len(rhrs)) if rhrs \
         else cfg["athlete"]["hr_rest_fallback"]
 
-    row["trimp"] = build.trimp(row["duration_s"], row["avg_hr"], hr_rest, hr_max)
+    row["trimp"] = build.trimp(row, hr_rest, hr_max)
     row["mech_km"] = build.mech_km(row)
 
     print(report_text(act, row, d, a.hr_cap, a.cadence, a.band, a.floor))
