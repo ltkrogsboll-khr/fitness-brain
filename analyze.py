@@ -39,8 +39,13 @@ What it does with what it finds:
              moving_avg_hr / moving_distance_km over the vendor's
              whole-activity totals when a row has them, so a walked warm-up
              or cooldown doesn't inflate TRIMP or mechanical load either.
+             Lap pattern becomes session_shape + structure_summary so an
+             interval day is named as such in context.md rather than scored
+             against easy-run HR/cadence caps.
   prose   -> one line in journal.md, which build.py folds into context.md and
-             serve.py injects into every coach conversation.
+             serve.py injects into every coach conversation. Interval-shaped
+             sessions lead with that structure blurb; steady ones keep the
+             adherence wording.
 
 So a file dropped in the folder reaches the next planning conversation by
 itself. Neither output stores the per-second streams: nothing downstream can
@@ -70,10 +75,19 @@ def readable():
 
 # Fields this script owns, named so they can't collide with the vendor's own
 # averages: `cadence` is what the CSV says, `moving_cadence` is what you did.
+# session_shape / structure_summary come from lap pattern, not 1 Hz streams —
+# enough for the coach to not score an interval day as a failed easy run.
 DERIVED = ["moving_time_s", "moving_avg_hr", "moving_cadence",
            "moving_pace_s_per_km", "moving_distance_km", "hr_cap_used",
            "pct_above_hr_cap", "cadence_in_band_pct", "hr_drift_bpm",
-           "decoupling_pct", "walk_break_s"]
+           "decoupling_pct", "walk_break_s",
+           "session_shape", "structure_summary"]
+
+# Laps shorter than this are usually GPS noise or an auto-pause fragment.
+_LAP_MIN_M = 50
+# Need enough real laps before "intervals" is a safer call than "steady".
+_MIN_LAPS_FOR_STRUCTURE = 6
+_MIN_WORK_REPS = 3
 
 
 def settings(cfg=None, hr_cap=None, cadence=None, band=None, floor=None):
@@ -122,6 +136,104 @@ def _mean(xs):
     return sum(xs) / len(xs) if xs else None
 
 
+def _median(xs):
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return None
+    mid = len(xs) // 2
+    return xs[mid] if len(xs) % 2 else (xs[mid - 1] + xs[mid]) / 2.0
+
+
+def _mmss_words(sec):
+    """Compact duration for a structure blurb: 15s, 2:08, 6:38."""
+    if sec is None:
+        return "?"
+    sec = int(round(sec))
+    if sec < 60:
+        return f"{sec}s"
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+def usable_laps(act, min_m=_LAP_MIN_M):
+    """Laps with enough distance and a usable timer to judge structure from."""
+    out = []
+    for lp in act.laps:
+        dist = lp.get("total_distance")
+        dur = lp.get("total_timer_time")
+        if dist is None or dur is None or dist < min_m or dur <= 0:
+            continue
+        out.append({
+            "distance": dist,
+            "duration_s": dur,
+            "speed": dist / dur,  # m/s
+            "avg_hr": lp.get("avg_hr"),
+            "avg_cadence": lp.get("avg_cadence"),
+        })
+    return out
+
+
+def session_structure(act):
+    """Lap-pattern shape for the coach: intervals vs steady.
+
+    Conservative: unsure → steady. Auto km-splits on an easy run look alike in
+    duration and speed, so they stay steady; short hard reps interleaved with
+    longer slower recoveries become intervals. -> (shape, summary).
+    """
+    laps = usable_laps(act)
+    if len(laps) < _MIN_LAPS_FOR_STRUCTURE:
+        return "steady", "Steady effort (few laps to judge structure from)."
+
+    speeds = [lp["speed"] for lp in laps]
+    durs = [lp["duration_s"] for lp in laps]
+    med_speed = _median(speeds)
+    med_dur = _median(durs)
+    if not med_speed or not med_dur:
+        return "steady", "Steady effort."
+
+    # Work = clearly shorter and faster than the session's middle. Thresholds
+    # are loose on purpose: false "intervals" mis-coaches more than a miss.
+    work_idx = []
+    for i, lp in enumerate(laps):
+        short = lp["duration_s"] <= min(90.0, 0.55 * med_dur)
+        fast = lp["speed"] >= 1.18 * med_speed
+        if short and fast:
+            work_idx.append(i)
+
+    if len(work_idx) < _MIN_WORK_REPS:
+        return "steady", "Steady effort (no repeated short/fast work laps)."
+
+    # Prefer interleaved work/rest over a single fast block at the end.
+    pairs = 0
+    for a, b in zip(work_idx, work_idx[1:]):
+        if b - a >= 2:  # at least one non-work lap between reps
+            pairs += 1
+    if pairs < _MIN_WORK_REPS - 1:
+        return "steady", "Steady effort (fast laps not interleaved with recoveries)."
+
+    work = [laps[i] for i in work_idx]
+    # Recovery = laps strictly between first and last work rep, excluding work.
+    lo, hi = work_idx[0], work_idx[-1]
+    rest = [laps[i] for i in range(lo, hi + 1) if i not in set(work_idx)]
+    n = len(work)
+    w_dur = _median([lp["duration_s"] for lp in work])
+    r_dur = _median([lp["duration_s"] for lp in rest]) if rest else None
+    warm = lo > 0
+    cool = hi < len(laps) - 1
+    bits = [f"~{n}× ~{_mmss_words(w_dur)} hard"]
+    if r_dur:
+        bits.append(f"~{_mmss_words(r_dur)} easy")
+    core = " / ".join(bits)
+    where = []
+    if warm:
+        where.append("after warm-up")
+    if cool:
+        where.append("before cool-down")
+    suffix = (" " + ", ".join(where)) if where else ""
+    summary = (f"Interval session: {core}{suffix}. "
+               f"Not an easy run — easy-run HR/cadence caps do not apply.")
+    return "intervals", summary
+
+
 def analyse(act, hr_cap=None, cadence=None, band=5, floor=140):
     """-> dict of conclusions. Every value is None when unmeasurable."""
     mask = moving_mask(act, floor)
@@ -148,19 +260,26 @@ def analyse(act, hr_cap=None, cadence=None, band=5, floor=140):
     # inflate the distance that feeds mech_km any more than it inflates HR.
     out["moving_distance_km"] = round(moving_time * ms / 1000.0, 2) if ms else None
 
-    # Adherence to the two things the plan actually asked for.
-    if hr_cap:
-        have = [h for h in hrs if h is not None]
-        out["hr_cap_used"] = hr_cap
-        out["pct_above_hr_cap"] = (
-            round(100.0 * len([h for h in have if h > hr_cap]) / len(have), 1)
-            if have else None)
-    if cadence:
-        have = [c for c in cads if c is not None]
-        out["cadence_in_band_pct"] = (
-            round(100.0 * len([c for c in have
-                               if cadence - band <= c <= cadence + band])
-                  / len(have), 1) if have else None)
+    shape, structure = session_structure(act)
+    out["session_shape"] = shape
+    out["structure_summary"] = structure
+
+    # Adherence to the two things the plan actually asked for — only when the
+    # session looks like the steady/easy effort those caps describe. Scoring
+    # an interval file against an easy HR ceiling reads as a failed easy run.
+    if shape != "intervals":
+        if hr_cap:
+            have = [h for h in hrs if h is not None]
+            out["hr_cap_used"] = hr_cap
+            out["pct_above_hr_cap"] = (
+                round(100.0 * len([h for h in have if h > hr_cap]) / len(have), 1)
+                if have else None)
+        if cadence:
+            have = [c for c in cads if c is not None]
+            out["cadence_in_band_pct"] = (
+                round(100.0 * len([c for c in have
+                                   if cadence - band <= c <= cadence + band])
+                      / len(have), 1) if have else None)
 
     # Drift and decoupling both split the moving portion in half. Drift is the
     # raw HR climb; decoupling divides it out by speed, which separates "I got
@@ -332,6 +451,10 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
              f"   HR {d.get('moving_avg_hr') or '-'}"
              f"   cadence {d.get('moving_cadence') or '-'} spm"
              f"   pace {mmss(d.get('moving_pace_s_per_km'))}/km")
+    if d.get("session_shape"):
+        L.append(f"  shape: {d['session_shape']}")
+        if d.get("structure_summary"):
+            L.append(f"  {d['structure_summary']}")
     if d.get("moving_cadence") and row.get("cadence"):
         gap = d["moving_cadence"] - row["cadence"]
         if abs(gap) >= 3:
@@ -353,8 +476,23 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
 
 def journal_line(act_name, row, d, hr_cap, cadence, band):
     """One line, in the grammar config.journal_grammar describes: a date, then
-    prose. No invented subjective scores — those are the athlete's to give."""
+    prose. No invented subjective scores — those are the athlete's to give.
+
+    Interval-shaped sessions lead with the lap structure and skip easy-run
+    adherence numbers — those caps describe a different kind of day.
+    """
     bits = [f"{row['distance_km']} km in {mmss(row['duration_s'])}"]
+    if d.get("session_shape") == "intervals" and d.get("structure_summary"):
+        bits.append(d["structure_summary"].rstrip("."))
+        if d.get("moving_avg_hr"):
+            bits.append(f"HR {d['moving_avg_hr']} avg while moving")
+        if d.get("moving_cadence"):
+            bits.append(f"cadence {d['moving_cadence']} spm while moving")
+        if d.get("moving_pace_s_per_km"):
+            bits.append(f"pace {mmss(d['moving_pace_s_per_km'])}/km while moving")
+        return (f"{row['date']} | note: {row['type']} — " + "; ".join(bits)
+                + f". [from {act_name}]")
+
     if d.get("moving_cadence"):
         b = f"cadence {d['moving_cadence']} spm while moving"
         if d.get("cadence_in_band_pct") is not None:
