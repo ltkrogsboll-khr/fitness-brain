@@ -60,6 +60,9 @@ def read(path, cfg=None):
         # "total_calories": 209,
     }
 
+    # Worth the effort if the format carries them: analyze.py reads the lap
+    # pattern to tell an interval session from a steady one. Distance and
+    # timer are the two it needs.
     laps = []
     # laps.append({"total_distance": 1000.0, "total_timer_time": 420.9,
     #              "avg_hr": 144, "max_hr": 159, "avg_cadence": 160})

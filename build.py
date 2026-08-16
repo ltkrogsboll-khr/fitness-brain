@@ -410,16 +410,35 @@ def write_context(daily, sess, hr_rest, hr_max, today):
 
     L.append("## Recent sessions\n")
     fm_col = fm["label"] if fm["enabled"] else "—"
-    L.append(f"| Date | Type | km | Time | Avg HR | TE | {fm_col} | Ascent |")
-    L.append("|---|---|---|---|---|---|---|---|")
-    for s in sorted(sess, key=lambda x: x.get("datetime", ""))[-12:]:
+    recent = sorted(sess, key=lambda x: x.get("datetime", ""))[-12:]
+    # The shape column only earns its width once one of these rows isn't a
+    # steady run. A column reading "steady" twelve times says nothing and says
+    # it in every coach conversation.
+    shape_col = any(s.get("session_shape") == "intervals" for s in recent)
+    sh_head, sh_rule = ("Shape | ", "---|") if shape_col else ("", "")
+    L.append(f"| Date | Type | {sh_head}km | Time | Avg HR | TE | {fm_col} | Ascent |")
+    L.append(f"|---|---|{sh_rule}---|---|---|---|---|---|")
+    for s in recent:
         secs = fnum(s, "duration_s") or 0
-        L.append("| {d} | {t} | {km} | {mm} | {hr} | {te} | {fmv} | {asc} |".format(
+        L.append("| {d} | {t} | {sh}{km} | {mm} | {hr} | {te} | {fmv} | {asc} |".format(
             d=(s.get("datetime") or "")[:16], t=s.get("type"),
+            # Blank, not "steady", when the laps couldn't say: analyze.py
+            # leaves the field empty rather than guess, and so does this.
+            sh=f"{s.get('session_shape') or '—'} | " if shape_col else "",
             km=s.get("distance_km") or "-", mm=f"{int(secs//60)}:{int(secs%60):02d}",
             hr=s.get("avg_hr") or "-", te=s.get("aerobic_te") or "-",
             fmv=(s.get(fm["field"]) if fm["enabled"] else None) or "-",
             asc=s.get("ascent_m") or "-"))
+    structured = [s for s in sess if s.get("session_shape") == "intervals"
+                  and s.get("structure_summary")]
+    if structured:
+        L.append("")
+        # The caveat lives here, once, rather than repeated inside every line.
+        L.append("Structured sessions, read from .fit laps. These were not "
+                 "easy runs — easy-run HR and cadence caps don't apply to them:")
+        for s in sorted(structured, key=lambda x: x.get("datetime", ""))[-6:]:
+            L.append(f"- {(s.get('datetime') or '')[:16]} {s.get('type')}: "
+                     f"{s['structure_summary']}")
     L.append("")
 
     if os.path.exists(JOURNAL):

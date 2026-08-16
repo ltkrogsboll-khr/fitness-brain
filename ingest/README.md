@@ -83,6 +83,13 @@ things are worth getting right on the first try, because neither errors:
   formats store a runner's 170 spm as 85 revolutions; double it in the reader,
   so nothing downstream has to know which sport it's looking at.
 
+And one worth the extra half hour: **pass the laps through** if the format has
+them. `analyze.py` reads their pattern to tell an interval session from a
+steady one — `total_distance` and `total_timer_time` per lap is all it needs —
+and that's what stops the coach grading a rep session against an easy-run HR
+cap. Skipping them costs no error and no warning, just every interval session
+that source will ever record coming back shapeless.
+
 ## The contract
 
 An adapter is one file exposing one function:

@@ -37,7 +37,7 @@ marked. Missing means "not recorded"; analyze.py degrades a measure rather than
 failing.
 
 session   dict, the whole-session summary
-laps      list of dicts, one per lap
+laps      list of dicts, one per lap — see LAPS below, they are load-bearing
 records   list of dicts, one per sample — the reason this path exists
 
 UNITS ARE THE CONTRACT. Getting one wrong produces plausible wrong numbers
@@ -80,6 +80,14 @@ revolutions and expect the reader to double it — do that doubling **in the
 reader**, so no code downstream has to remember which sport it is looking at.
 It is the single easiest thing to get wrong here, and a session that reads 85
 instead of 170 looks like a form collapse rather than a bug.
+
+LAPS are not decoration. analyze.py reads their pattern to decide whether a
+session was intervals or a steady effort, which is what stops the coach from
+grading a rep session against an easy-run HR cap. It needs `total_distance`
+and `total_timer_time` per lap and nothing else; a reader that returns
+`laps=[]` still works, but every interval session that source ever records
+comes back shapeless, and nothing in the output says why. If the format has
+laps, pass them through.
 """
 
 from __future__ import annotations
