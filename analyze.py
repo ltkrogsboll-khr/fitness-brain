@@ -172,35 +172,73 @@ def usable_laps(act, min_m=_LAP_MIN_M):
     return out
 
 
+def _speed_clusters(speeds, k=3):
+    """1-D k-means over lap speeds. -> [(centroid, members), ...] slow to fast,
+    empty clusters dropped.
+
+    A pooled median mis-locates "the middle" whenever work and recovery laps
+    show up in similar numbers — which is most real interval sessions (8x400m
+    is roughly 1 work : 1 recovery lap by count), so the median sits between
+    the two groups rather than describing either one, and a fixed offset from
+    it clears recovery laps but not work laps. Two clusters isn't enough
+    either: a warm-up/cool-down pace is usually well below recovery-jog pace,
+    so a 2-way split pulls the recovery laps in with work instead of leaving
+    them as "not work" — which erases the interleaving that says "intervals"
+    rather than "one fast block". Three (warm-up/cool-down, recovery, work)
+    separates work cleanly regardless of how many tiers the session actually
+    has; unused tiers just come back as empty clusters.
+    """
+    lo, hi = min(speeds), max(speeds)
+    if hi - lo < 1e-9:
+        return [(lo, list(speeds))]
+    centroids = [lo + (hi - lo) * i / (k - 1) for i in range(k)]
+    groups = [[] for _ in range(k)]
+    for _ in range(50):
+        groups = [[] for _ in range(k)]
+        for v in speeds:
+            j = min(range(k), key=lambda idx: abs(v - centroids[idx]))
+            groups[j].append(v)
+        new_centroids = [sum(g) / len(g) if g else centroids[idx]
+                         for idx, g in enumerate(groups)]
+        if all(abs(a - b) < 1e-6 for a, b in zip(new_centroids, centroids)):
+            centroids = new_centroids
+            break
+        centroids = new_centroids
+    pairs = sorted(((c, g) for c, g in zip(centroids, groups) if g),
+                    key=lambda p: p[0])
+    return pairs
+
+
 def session_structure(act):
     """Lap-pattern shape for the coach: intervals vs steady.
 
-    Conservative: unsure → steady. Auto km-splits on an easy run look alike in
-    duration and speed, so they stay steady; short hard reps interleaved with
-    longer slower recoveries become intervals. -> (shape, summary).
+    Conservative: unsure → steady. Auto km-splits on an easy run vary by only
+    a few percent lap to lap, so they cluster as one speed and stay steady;
+    hard reps interleaved with slower recoveries cluster as two and, if that
+    pattern repeats, become intervals. -> (shape, summary).
     """
     laps = usable_laps(act)
     if len(laps) < _MIN_LAPS_FOR_STRUCTURE:
         return "steady", "Steady effort (few laps to judge structure from)."
 
     speeds = [lp["speed"] for lp in laps]
-    durs = [lp["duration_s"] for lp in laps]
-    med_speed = _median(speeds)
-    med_dur = _median(durs)
-    if not med_speed or not med_dur:
+    clusters = _speed_clusters(speeds)
+    if len(clusters) < 2:
         return "steady", "Steady effort."
 
-    # Work = clearly shorter and faster than the session's middle. Thresholds
-    # are loose on purpose: false "intervals" mis-coaches more than a miss.
-    work_idx = []
-    for i, lp in enumerate(laps):
-        short = lp["duration_s"] <= min(90.0, 0.55 * med_dur)
-        fast = lp["speed"] >= 1.18 * med_speed
-        if short and fast:
-            work_idx.append(i)
+    # Loose on purpose: false "intervals" mis-coaches more than a miss. Needs
+    # a real pace gap above whatever the next tier down is — recovery pace if
+    # there's a warm-up/cool-down tier too, otherwise the noise floor.
+    cent_values = [c for c, _ in clusters]
+    fast_c, next_c = cent_values[-1], cent_values[-2]
+    if fast_c < 1.18 * next_c:
+        return "steady", "Steady effort."
+
+    work_idx = [i for i, lp in enumerate(laps)
+                if min(cent_values, key=lambda c: abs(lp["speed"] - c)) == fast_c]
 
     if len(work_idx) < _MIN_WORK_REPS:
-        return "steady", "Steady effort (no repeated short/fast work laps)."
+        return "steady", "Steady effort (no repeated fast work laps)."
 
     # Prefer interleaved work/rest over a single fast block at the end.
     pairs = 0
