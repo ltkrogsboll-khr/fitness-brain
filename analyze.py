@@ -40,8 +40,8 @@ What it does with what it finds:
              whole-activity totals when a row has them, so a walked warm-up
              or cooldown doesn't inflate TRIMP or mechanical load either.
              Lap pattern becomes session_shape + structure_summary so an
-             interval day is named as such in context.md rather than scored
-             against easy-run HR/cadence caps.
+             interval day is named as such in context.md rather than read as
+             a failed easy run. Empty when the laps say nothing either way.
   prose   -> one line in journal.md, which build.py folds into context.md and
              serve.py injects into every coach conversation. Interval-shaped
              sessions lead with that structure blurb; steady ones keep the
@@ -85,9 +85,16 @@ DERIVED = ["moving_time_s", "moving_avg_hr", "moving_cadence",
 
 # Laps shorter than this are usually GPS noise or an auto-pause fragment.
 _LAP_MIN_M = 50
-# Need enough real laps before "intervals" is a safer call than "steady".
+# Below this many usable laps there is nothing to read a pattern from, and the
+# honest answer is "unknown" rather than a confident "steady".
 _MIN_LAPS_FOR_STRUCTURE = 6
 _MIN_WORK_REPS = 3
+# How much faster the work tier must be than the tier below it. Auto km-splits
+# on an easy run drift by a few percent; a rep is a different effort entirely.
+_WORK_SPEED_RATIO = 1.18
+# A lead-in or lead-out only counts as a warm-up or cool-down if it is clearly
+# longer than the session's own recoveries — see session_structure.
+_BOOKEND_RATIO = 1.5
 
 
 def settings(cfg=None, hr_cap=None, cadence=None, band=None, floor=None):
@@ -155,20 +162,16 @@ def _mmss_words(sec):
 
 
 def usable_laps(act, min_m=_LAP_MIN_M):
-    """Laps with enough distance and a usable timer to judge structure from."""
+    """The vendor's own lap dicts, minus the ones nothing can be read from, each
+    with `speed` in m/s added. A lap with no timer or a sub-50 m distance is an
+    auto-pause fragment or a stray press, and its pace is noise."""
     out = []
     for lp in act.laps:
         dist = lp.get("total_distance")
         dur = lp.get("total_timer_time")
         if dist is None or dur is None or dist < min_m or dur <= 0:
             continue
-        out.append({
-            "distance": dist,
-            "duration_s": dur,
-            "speed": dist / dur,  # m/s
-            "avg_hr": lp.get("avg_hr"),
-            "avg_cadence": lp.get("avg_cadence"),
-        })
+        out.append({**lp, "speed": dist / dur})
     return out
 
 
@@ -204,34 +207,41 @@ def _speed_clusters(speeds, k=3):
             centroids = new_centroids
             break
         centroids = new_centroids
-    pairs = sorted(((c, g) for c, g in zip(centroids, groups) if g),
-                    key=lambda p: p[0])
-    return pairs
+    return sorted(((c, g) for c, g in zip(centroids, groups) if g),
+                  key=lambda p: p[0])
 
 
 def session_structure(act):
-    """Lap-pattern shape for the coach: intervals vs steady.
+    """Lap-pattern shape for the coach: intervals vs steady. -> (shape, summary)
 
-    Conservative: unsure → steady. Auto km-splits on an easy run vary by only
-    a few percent lap to lap, so they cluster as one speed and stay steady;
-    hard reps interleaved with slower recoveries cluster as two and, if that
-    pattern repeats, become intervals. -> (shape, summary).
+    Auto km-splits on an easy run vary by only a few percent lap to lap, so
+    they cluster as one speed and stay steady; hard reps interleaved with
+    slower recoveries cluster as two and, if that pattern repeats, become
+    intervals.
+
+    Three answers, not two. Unsure between the shapes → "steady", because a
+    false "intervals" mis-coaches worse than a miss. But *no evidence either
+    way* — a ride logged as one lap, a run someone never pressed lap on —
+    returns None, not "steady": a shape is a claim about the session, and
+    asserting one from a single lap is the kind of plausible-looking number
+    this repo exists to not produce.
     """
     laps = usable_laps(act)
     if len(laps) < _MIN_LAPS_FOR_STRUCTURE:
-        return "steady", "Steady effort (few laps to judge structure from)."
+        return None, (f"Shape not judged: {len(laps)} usable lap(s), too few "
+                      f"to read a pattern from.")
 
     speeds = [lp["speed"] for lp in laps]
     clusters = _speed_clusters(speeds)
     if len(clusters) < 2:
         return "steady", "Steady effort."
 
-    # Loose on purpose: false "intervals" mis-coaches more than a miss. Needs
-    # a real pace gap above whatever the next tier down is — recovery pace if
-    # there's a warm-up/cool-down tier too, otherwise the noise floor.
+    # Loose on purpose. Needs a real pace gap above whatever the next tier down
+    # is — recovery pace if there's a warm-up/cool-down tier too, otherwise the
+    # noise floor.
     cent_values = [c for c, _ in clusters]
     fast_c, next_c = cent_values[-1], cent_values[-2]
-    if fast_c < 1.18 * next_c:
+    if fast_c < _WORK_SPEED_RATIO * next_c:
         return "steady", "Steady effort."
 
     work_idx = [i for i, lp in enumerate(laps)
@@ -240,12 +250,11 @@ def session_structure(act):
     if len(work_idx) < _MIN_WORK_REPS:
         return "steady", "Steady effort (no repeated fast work laps)."
 
-    # Prefer interleaved work/rest over a single fast block at the end.
-    pairs = 0
-    for a, b in zip(work_idx, work_idx[1:]):
-        if b - a >= 2:  # at least one non-work lap between reps
-            pairs += 1
-    if pairs < _MIN_WORK_REPS - 1:
+    # Interleaving is what separates reps from a progression run: a tempo
+    # block's fast laps sit next to each other, a rep's have a recovery
+    # between them.
+    gaps = sum(1 for a, b in zip(work_idx, work_idx[1:]) if b - a >= 2)
+    if gaps < _MIN_WORK_REPS - 1:
         return "steady", "Steady effort (fast laps not interleaved with recoveries)."
 
     work = [laps[i] for i in work_idx]
@@ -253,23 +262,24 @@ def session_structure(act):
     lo, hi = work_idx[0], work_idx[-1]
     rest = [laps[i] for i in range(lo, hi + 1) if i not in set(work_idx)]
     n = len(work)
-    w_dur = _median([lp["duration_s"] for lp in work])
-    r_dur = _median([lp["duration_s"] for lp in rest]) if rest else None
-    warm = lo > 0
-    cool = hi < len(laps) - 1
+    w_dur = _median([lp["total_timer_time"] for lp in work])
+    r_dur = _median([lp["total_timer_time"] for lp in rest]) if rest else None
+
+    # A warm-up has to be more than the rest that happened to follow the last
+    # rep. Ending on a recovery lap is how most rep sessions end, and calling
+    # that a cool-down invents a piece of the session the athlete didn't run.
+    bookend = _BOOKEND_RATIO * r_dur if r_dur else 0
+    lead = sum(lp["total_timer_time"] for lp in laps[:lo])
+    tail = sum(lp["total_timer_time"] for lp in laps[hi + 1:])
     bits = [f"~{n}× ~{_mmss_words(w_dur)} hard"]
     if r_dur:
         bits.append(f"~{_mmss_words(r_dur)} easy")
     core = " / ".join(bits)
-    where = []
-    if warm:
-        where.append("after warm-up")
-    if cool:
-        where.append("before cool-down")
-    suffix = (" " + ", ".join(where)) if where else ""
-    summary = (f"Interval session: {core}{suffix}. "
-               f"Not an easy run — easy-run HR/cadence caps do not apply.")
-    return "intervals", summary
+    where = {(True, True): ", between a warm-up and a cool-down",
+             (True, False): ", after a warm-up",
+             (False, True): ", before a cool-down"}.get(
+                 (lead > bookend, tail > bookend), "")
+    return "intervals", f"Interval session: {core}{where}."
 
 
 def analyse(act, hr_cap=None, cadence=None, band=5, floor=140):
@@ -298,26 +308,27 @@ def analyse(act, hr_cap=None, cadence=None, band=5, floor=140):
     # inflate the distance that feeds mech_km any more than it inflates HR.
     out["moving_distance_km"] = round(moving_time * ms / 1000.0, 2) if ms else None
 
-    shape, structure = session_structure(act)
-    out["session_shape"] = shape
-    out["structure_summary"] = structure
+    out["session_shape"], out["structure_summary"] = session_structure(act)
 
-    # Adherence to the two things the plan actually asked for — only when the
-    # session looks like the steady/easy effort those caps describe. Scoring
-    # an interval file against an easy HR ceiling reads as a failed easy run.
-    if shape != "intervals":
-        if hr_cap:
-            have = [h for h in hrs if h is not None]
-            out["hr_cap_used"] = hr_cap
-            out["pct_above_hr_cap"] = (
-                round(100.0 * len([h for h in have if h > hr_cap]) / len(have), 1)
-                if have else None)
-        if cadence:
-            have = [c for c in cads if c is not None]
-            out["cadence_in_band_pct"] = (
-                round(100.0 * len([c for c in have
-                                   if cadence - band <= c <= cadence + band])
-                      / len(have), 1) if have else None)
+    # Adherence to the two things the plan actually asked for. Measured for
+    # every session, including interval days: the percentage is a true fact
+    # about the file either way, and a column that sometimes holds a number
+    # and sometimes silently doesn't is worse than one that always does.
+    # What changes for an interval day is that journal_line doesn't *narrate*
+    # it — read as a grade, "89% above the easy cap" turns a session that went
+    # to plan into a failed easy run.
+    if hr_cap:
+        have = [h for h in hrs if h is not None]
+        out["hr_cap_used"] = hr_cap
+        out["pct_above_hr_cap"] = (
+            round(100.0 * len([h for h in have if h > hr_cap]) / len(have), 1)
+            if have else None)
+    if cadence:
+        have = [c for c in cads if c is not None]
+        out["cadence_in_band_pct"] = (
+            round(100.0 * len([c for c in have
+                               if cadence - band <= c <= cadence + band])
+                  / len(have), 1) if have else None)
 
     # Drift and decoupling both split the moving portion in half. Drift is the
     # raw HR climb; decoupling divides it out by speed, which separates "I got
@@ -471,12 +482,12 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
         L.append(f"step {row['stride_m']} m   vert osc {row['vert_osc_cm']} cm"
                  f"   GCT {row['gct_ms']} ms   power {s.get('avg_power') or '-'} W")
 
-    laps = [lp for lp in act.laps if (lp.get("total_distance") or 0) >= 50]
+    laps = usable_laps(act)
     if len(laps) > 1:
         L.append("\nLaps")
         L.append(f"{'#':>3} {'dist':>8} {'time':>8} {'pace':>9} {'HR':>9} {'cad':>5}")
         for i, lp in enumerate(laps, 1):
-            dm, tt = lp["total_distance"], lp.get("total_timer_time") or 0
+            dm, tt = lp["total_distance"], lp["total_timer_time"]
             c = lp.get("avg_cadence")
             L.append(f"{i:>3} {dm:>7.0f}m {mmss(tt):>8} "
                      f"{mmss(tt / (dm / 1000.0)):>6}/km "
@@ -489,10 +500,10 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
              f"   HR {d.get('moving_avg_hr') or '-'}"
              f"   cadence {d.get('moving_cadence') or '-'} spm"
              f"   pace {mmss(d.get('moving_pace_s_per_km'))}/km")
-    if d.get("session_shape"):
-        L.append(f"  shape: {d['session_shape']}")
-        if d.get("structure_summary"):
-            L.append(f"  {d['structure_summary']}")
+    if d.get("structure_summary"):
+        shape = d.get("session_shape")
+        L.append(f"  shape: {shape}" if shape else "  shape: unknown")
+        L.append(f"  {d['structure_summary']}")
     if d.get("moving_cadence") and row.get("cadence"):
         gap = d["moving_cadence"] - row["cadence"]
         if abs(gap) >= 3:
@@ -500,7 +511,12 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
                      f" — {gap:+d} spm off what you actually held, because it "
                      f"averages in the walking")
     if hr_cap and d.get("pct_above_hr_cap") is not None:
-        L.append(f"  HR above {n(hr_cap)}: {d['pct_above_hr_cap']}% of moving time")
+        # Still shown for an interval day, but named for what it is: the cap
+        # describes an easy run, so the number is a fact and not a mark.
+        note = ("   (an easy-run cap — this session was intervals)"
+                if d.get("session_shape") == "intervals" else "")
+        L.append(f"  HR above {n(hr_cap)}: {d['pct_above_hr_cap']}% of moving "
+                 f"time{note}")
     if cadence and d.get("cadence_in_band_pct") is not None:
         L.append(f"  cadence in {n(cadence - band)}-{n(cadence + band)}: "
                  f"{d['cadence_in_band_pct']}% of moving time")
@@ -516,8 +532,10 @@ def journal_line(act_name, row, d, hr_cap, cadence, band):
     """One line, in the grammar config.journal_grammar describes: a date, then
     prose. No invented subjective scores — those are the athlete's to give.
 
-    Interval-shaped sessions lead with the lap structure and skip easy-run
-    adherence numbers — those caps describe a different kind of day.
+    Interval-shaped sessions lead with the lap structure and leave out the
+    easy-run adherence numbers. Both are still measured and still in
+    sessions.csv; what they are not is a verdict on a day that was never
+    meant to stay under an easy cap, and this line is what the coach reads.
     """
     bits = [f"{row['distance_km']} km in {mmss(row['duration_s'])}"]
     if d.get("session_shape") == "intervals" and d.get("structure_summary"):
