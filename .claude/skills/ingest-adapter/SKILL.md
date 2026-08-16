@@ -102,7 +102,8 @@ cp ingest/readers/_template.py ingest/readers/local/<format>.py
 Declare `EXTENSIONS = (".tcx",)` and that's the wiring — there is **nothing to
 set in config**. Return an `Activity` with `session`, `laps` and `records`; the
 field list with units is in `ingest/activity.py`. Only `t` (seconds from the
-session start) is required on a record; omit anything the format doesn't carry.
+session start) is required on a record; omit anything the format doesn't carry
+— except laps, if the format has them, for the reason below.
 
 ```sh
 python3 analyze.py <file> --dry-run      # runs it, writes nothing
@@ -159,6 +160,16 @@ Reader-specific:
    revolutions. Double it **in the reader**, so nothing downstream has to know
    which sport it's looking at. A session reading 85 looks like a form collapse
    rather than a bug.
+
+7. **Dropped laps.** Easy to treat as optional detail — `_template.py` has
+   them commented out — but `analyze.py` reads the lap pattern to tell an
+   interval session from a steady one, which is what keeps the coach from
+   grading a rep session against an easy-run HR cap. `total_distance` and
+   `total_timer_time` per lap are all it needs. A reader that skips laps
+   works, and then every interval session that source records comes back
+   shapeless with nothing in the output explaining why — so if the format
+   carries laps, pass them through, and if it genuinely doesn't, tell the
+   user that's what they're giving up.
 
 ## Finishing
 

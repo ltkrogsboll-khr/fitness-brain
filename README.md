@@ -192,9 +192,13 @@ reach a coaching conversation.
 What it derives, per session, beyond what any summary row can hold: `moving_*`
 cadence/HR/pace/distance with walking excluded, `pct_above_hr_cap`,
 `cadence_in_band_pct`, `hr_drift_bpm` / `decoupling_pct` (whether HR rose
-because you tired or because you sped up — a distinction a mean destroys), and
-`walk_break_s`. The numbers land as extra columns on the session row in
-`data/sessions.csv` — any of them can become `config.form_metric.field`, and
+because you tired or because you sped up — a distinction a mean destroys),
+`walk_break_s`, and `session_shape` — whether the lap pattern says intervals
+or a steady effort, so a rep session reaches the coach named as one rather
+than as an easy run you ran far too hard. (Empty when the laps can't say: a
+ride logged as a single lap gets no shape rather than a guessed one.) The
+numbers land as extra columns on the session row in `data/sessions.csv` — any
+of them can become `config.form_metric.field`, and
 `build.py`'s TRIMP/mechanical-km calculations prefer the `moving_*` versions
 over the vendor's whole-activity totals whenever a session has them, so a
 walked warm-up doesn't inflate load either. The prose becomes one line in
@@ -213,8 +217,11 @@ mind before treating it as a diagnosis.
 
 Targets live in `config.analysis` (`hr_cap`, `cadence_target`, `cadence_band`)
 because they're what the *current plan* asked for — update them when the plan
-changes. For a one-off, `python3 analyze.py` takes the newest file in the folder
-and prints a lap-by-lap report without writing anything:
+changes. Shape detection deliberately has no such knobs: it reads the lap
+pattern your watch already recorded, and a threshold you can tune is a
+threshold that can be tuned into seeing intervals that weren't there. For a
+one-off, `python3 analyze.py` takes the newest file in the folder and prints a
+lap-by-lap report without writing anything:
 
 ```sh
 python3 analyze.py --dry-run              # newest activity, print only
