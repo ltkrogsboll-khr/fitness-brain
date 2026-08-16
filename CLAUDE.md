@@ -77,6 +77,25 @@ A skipped row with no output becomes "the chart looks wrong" three weeks later.
 that would have fixed it. Same instinct in `build.py` — it prints both rows when
 it sees one workout counted twice, rather than letting the load quietly double.
 
+## Refreshing a raw export
+
+`data/raw/` files of the same kind merge by filename sort order
+(`ingest/parsers.py:route_files`), not by recency — so when a new export's
+date range overlaps an older file's, whichever name sorts last wins on the
+overlap, silently. A numbered re-export (`Sleep-2.csv`) usually sorts *before*
+the original (`Sleep.csv`), so the stale file wins by default — the opposite
+of what you want.
+
+When a new export of the same kind arrives, don't just drop it alongside the
+old one: check whether it supersedes the old file's date range and, if so,
+retire the old file rather than leaving both to merge. Before deleting,
+confirm the old file's *unique* range (the part the new one doesn't cover) is
+already in `data/daily.csv` from a prior build — the upsert is what makes it
+safe to let a raw export's window slide forward. Then rebuild and say plainly
+what was replaced and why — these are the user's own data files, and a silent
+swap is exactly the kind of thing this repo's "report, don't swallow" instinct
+above is meant to rule out.
+
 ## Verifying a change
 
 ```sh
