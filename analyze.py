@@ -270,7 +270,8 @@ def activity_rows(cfg=None, report=None):
         d = analyse(act, opt["hr_cap"], opt["cadence"], opt["band"], opt["floor"])
         if not d:
             if report:
-                report.warn(f"{name}: no usable records — nothing derived")
+                report.warn(f"{name}: no speed or cadence readings, so pace/HR "
+                            f"detail couldn't be refined for this session")
             continue
         row = summary_row(act, d)
         row["_source_file"] = name           # for the journal marker; dropped below

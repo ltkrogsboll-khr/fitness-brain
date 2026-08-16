@@ -45,7 +45,6 @@ button.primary:hover{opacity:.85;color:var(--page)}
 button:disabled{opacity:.5;cursor:default}
 .card{background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:14px}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 /* --- status --------------------------------------------------------------- */
 /* Colour appears only as small state dots — never as coloured type. */
 .status{padding:17px 19px;border-radius:12px;background:var(--surface);
@@ -105,12 +104,6 @@ details.dis .body{padding:2px 14px 14px}
 .day .tt{font-size:13px;font-weight:600;line-height:1.25;margin-top:2px}
 .chk{font-size:12px;font-weight:700;color:var(--ink2)}
 .chk.miss{color:var(--muted);font-weight:600}
-.tile .label{color:var(--muted);font-size:11px;text-transform:uppercase;
-  letter-spacing:.05em;display:flex;align-items:center;gap:5px}
-.tile .label .dot{width:6px;height:6px;margin:0}
-.tile .val{font-size:25px;font-weight:600;margin-top:3px;line-height:1.15;
-  letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.tile .note{color:var(--muted);font-size:12px;margin-top:2px}
 .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:12px}
 .ctitle{font-size:13px;font-weight:600;margin-bottom:1px;
   display:flex;align-items:center;gap:6px}
@@ -206,13 +199,6 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 <h2>Status</h2>
 <pre id="ingest"></pre>
 <div id="status"></div>
-
-<details class="dis" id="d-metrics">
-  <summary>The numbers behind it <span class="cnt">loads, readiness, cadence</span></summary>
-  <div class="body">
-    <div class="tiles" id="tiles"></div>
-  </div>
-</details>
 
 <h2>Plan <span class="sub" id="planname"></span></h2>
 <div id="todaycard"></div>
@@ -534,11 +520,6 @@ const LVL = {2:'var(--crit)', 1:'var(--warn)', 0:'var(--good)'};
 const dot = lvl => lvl==null ? '<i class="dot none"></i>'
                              : `<i class="dot" style="background:${LVL[lvl]}"></i>`;
 
-function tile(c){
-  return `<div class="card tile"><div class="label">${dot(c.lvl)}${c.long}</div>
-    <div class="val">${c.val}</div>
-    <div class="note">${c.note||''}</div></div>`;
-}
 const kindLabel = k => (C.plan.kinds[k]||{}).label || (k||'').toUpperCase();
 /* Two kinds of day the data can't speak for: rest, where there was nothing to
    do, and untracked, where there was something to do that no export will ever
@@ -553,11 +534,10 @@ function dayName(iso){
 }
 
 /* The checks, and the only place in the UI a threshold is read. Every judgement
-   on the page reads from this one list: the pill row is the list, the reasons
-   under the verdict are the entries that lit up, the tiles are the same entries
-   again with more room. Adding a metric here adds it in all three places —
-   which is the only arrangement in which the summary and the pills cannot drift
-   out of step with each other.
+   on the page reads from this one list: the pill row is the list, and the reasons
+   under the verdict are the entries that lit up. Adding a metric here adds it in
+   both places — which is the only arrangement in which the summary and the pills
+   cannot drift out of step with each other.
 
    The numbers themselves come from config.json, so the dashboard and the policy
    the coach reads are quoting one source rather than two copies.
@@ -580,7 +560,7 @@ function checks(){
               : (mech.warn_ratio && s.mech_acwr>mech.warn_ratio) ? 1 : 0;
     const ceil = fmt(mech.acwr_ceiling,2);
     out.push({
-      lvl, label:`${mech.label} ACWR`, long:`${mech.label} ACWR`,
+      lvl, label:`${mech.label} ACWR`,
       val:fmt(s.mech_acwr,2),
       note:`${fmt(s.mech_acute,1)} vs ${fmt(s.mech_chronic,1)} ${mech.unit} · ceiling ${ceil}`,
       head:lvl===2 ? `${mech.label} load is over the ceiling`
@@ -598,7 +578,7 @@ function checks(){
   const ceilA = fmt(aer.acwr_ceiling,2);
   out.push({
     lvl: s.aerobic_acwr==null ? null : s.aerobic_acwr>aer.acwr_ceiling ? 2 : 0,
-    label:`${aer.label} ACWR`, long:`${aer.label} ACWR`,
+    label:`${aer.label} ACWR`,
     val:fmt(s.aerobic_acwr,2),
     note:`${fmt(s.aerobic_acute,0)} vs ${fmt(s.aerobic_chronic,0)} · ceiling ${ceilA}`,
     head:`${aer.label} load is over the ceiling`,
@@ -609,7 +589,7 @@ function checks(){
   if(prim.enabled && prim.cap){
     out.push({
       lvl: s.primary_km_cycle==null ? null : s.primary_km_cycle>prim.cap ? 1 : 0,
-      label:`${prim.label}, ${CYC()}d`, long:`${prim.label}, ${CYC()} days`,
+      label:`${prim.label}, ${CYC()}d`,
       val:`${fmt(s.primary_km_cycle,1)} ${prim.unit}`,
       note:prim.cap_note || `cap: ${prim.cap} ${prim.unit}`,
       head:`${prim.label} volume is over the cap`,
@@ -621,7 +601,7 @@ function checks(){
 
   out.push({
     lvl: s.hrv_night==null ? null : hrvLow ? 1 : 0,
-    label:'HRV', long:'Overnight HRV',
+    label:'HRV',
     val:s.hrv_night==null ? '–' : fmt(s.hrv_night,0)+' ms',
     note:`baseline ${fmt(s.hrv_lo,0)}–${fmt(s.hrv_hi,0)} ms`,
     head:'Overnight HRV below baseline',
@@ -630,7 +610,7 @@ function checks(){
       (RHR is ${fmt(s.rhr,0)}).` : ''}`
   },{
     lvl: s.sleep_score==null ? null : s.sleep_score<rd.sleep_score_warn ? 1 : 0,
-    label:'Sleep', long:'Last sleep',
+    label:'Sleep',
     val:s.sleep_score==null ? '–' : fmt(s.sleep_score,0),
     note:`RHR ${fmt(s.rhr,0)} · ${s.sleep_date||''}`,
     head:`Sleep score under ${rd.sleep_score_warn}`,
@@ -641,7 +621,7 @@ function checks(){
   if(fmc.enabled && fmc.floor){
     out.push({
       lvl: form==null ? null : form<fmc.floor ? 1 : 0,
-      label:fmc.label, long:`Last session ${fmc.label.toLowerCase()}`,
+      label:fmc.label,
       val:form==null ? '–' : `${form.toFixed(0)} ${fmc.unit}`,
       note:`floor ${fmc.floor}${fmc.target ? ` · target ${fmc.target}` : ''}`,
       head:`${fmc.label} under the floor`,
@@ -705,8 +685,6 @@ function renderStatus(a){
         `<span class="chip">${dot(c.lvl)}<span class="k">${c.label}</span><b>${c.val}</b></span>`
         ).join('')}</div>
     </div>`;
-
-  $('#tiles').innerHTML = a.checks.map(tile).join('');
 }
 
 /* Which day the card above the strip is showing. null means "today" (or the
