@@ -542,8 +542,16 @@ class Handler(BaseHTTPRequestHandler):
         # Picked up without a restart, so editing config.json and hitting
         # Rebuild is the whole loop.
         CFG = config.load(force=True)
-        return self._send(200, {"ok": r.returncode == 0,
-                                "out": (r.stdout + r.stderr).strip()})
+        out = (r.stdout + r.stderr).strip()
+        # ingest/report.py's raw lines are for the terminal, not the dashboard —
+        # a warning like "no speed or cadence readings" is exactly the kind of
+        # backend detail a user shouldn't have to parse in the browser. The
+        # frontend gets only a count; anyone who needs the detail already has
+        # it in the terminal that ran this, or can ask the coding agent in
+        # their IDE to read it.
+        warn_count = sum(1 for line in out.splitlines()
+                         if line.strip().startswith("!"))
+        return self._send(200, {"ok": r.returncode == 0, "warn_count": warn_count})
 
     JOURNAL_RE = re.compile(r"\[\[journal:\s*(.+?)\s*\]\]", re.S)
     # A plan is multi-line and contains its own ``` fences, so it needs a

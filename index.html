@@ -157,11 +157,10 @@ input,textarea{font:inherit;background:var(--page);color:var(--ink);
 input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 .jlist{font-size:12px;color:var(--ink2);max-height:190px;overflow:auto;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.7}
-/* build.py's ingest report — only worth screen space when it says something */
+/* Rebuild flag — a plain-language nudge, not the ingest report itself */
 #ingest{display:none;margin:0 0 14px;padding:9px 11px;border-radius:8px;
   border:1px solid var(--border);background:var(--surface);font-size:12px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.6;
-  white-space:pre-wrap;overflow-x:auto;color:var(--ink2)}
+  line-height:1.6;color:var(--ink2)}
 #ingest.bad{border-color:var(--warn)}
 #log{min-height:40px;max-height:440px;overflow:auto;display:flex;
   flex-direction:column;gap:12px;padding:2px}
@@ -863,19 +862,25 @@ async function load(){
   checkContextRefresh();
 }
 
-// The ingest report is the only place a mis-mapped column shows up as words
-// rather than as an empty chart, so a rebuild that skipped rows or couldn't find
-// a column says so here instead of scrolling past in a terminal.
+// A rebuild that skipped rows or couldn't find a column shouldn't dump the
+// ingest report's raw text here — that's backend detail (filenames, config
+// keys) nobody should have to parse in a browser. This says only that
+// something needs a look and points at the IDE, where the real report
+// already printed to the terminal.
 $('#rebuild').onclick = async e => {
   const b=e.target; b.disabled=true; b.textContent='Rebuilding…';
   const r = await (await fetch('/api/build',{method:'POST',body:'{}'})).json();
   await load();
-  const out = (r.out||'').trim();
-  const bad = !r.ok || /^\s*!/m.test(out) || /skipped\s+[1-9]/.test(out);
+  const bad = !r.ok || r.warn_count > 0;
   const box = $('#ingest');
-  box.textContent = out;
+  box.textContent = !r.ok
+    ? 'Rebuild failed — ask your coding agent in the IDE to check what happened.'
+    : bad
+    ? `Rebuild flagged ${r.warn_count} item${r.warn_count===1?'':'s'} — ask your `
+      + 'coding agent in the IDE to check the ingest report.'
+    : '';
   box.className = bad ? 'bad' : '';
-  box.style.display = (out && bad) ? 'block' : 'none';
+  box.style.display = bad ? 'block' : 'none';
   b.disabled=false; b.textContent = r.ok ? 'Rebuild from CSVs' : 'Rebuild failed';
 };
 
