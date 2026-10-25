@@ -2,10 +2,10 @@
 """Inspect and test ingestion without running the rest of the pipeline.
 
     python3 -m ingest             which adapters exist, which one is active
-    python3 -m ingest --check     run the active one over data/raw/ and report
+    python3 -m ingest --check     run the active one over data/inbox/ and report
     python3 -m ingest --check -a strava     ...using a specific adapter
     python3 -m ingest --readers   single-session readers and the extensions
-                                  they claim (the data/activities/ path)
+                                  they claim (the other half of data/inbox/)
 
 --check writes nothing. It is the loop to work in while getting an adapter
 right: it prints the ingest report, then how many records carried each field
@@ -24,14 +24,15 @@ import config  # noqa: E402
 import ingest  # noqa: E402
 from ingest import schema  # noqa: E402
 
-RAW = os.path.join(ingest.ROOT, "data", "raw")
+INBOX = ingest.INBOX
 
 
 def list_adapters(cfg):
     active = ingest.adapter_name(cfg)
     have = ingest.available()
-    print(f"ingest contract v{schema.CONTRACT}   raw dir: "
-          f"{os.path.relpath(RAW, ingest.ROOT)}/\n")
+    print(f"ingest contract v{schema.CONTRACT}   drop dir: "
+          f"{os.path.relpath(INBOX, ingest.ROOT)}/   reads: "
+          f"{', '.join(ingest.adapter_extensions(cfg))}\n")
     if not have:
         print("No adapters found in ingest/adapters/.")
         return
@@ -54,7 +55,7 @@ def list_readers():
 
     have = activity.available()
     print(f"activity contract v{activity.CONTRACT}   drop dir: "
-          f"data/activities/\n")
+          f"{os.path.relpath(INBOX, ingest.ROOT)}/\n")
     if not have:
         print("No readers found in ingest/readers/.")
         return
@@ -103,12 +104,16 @@ def check(cfg, name=None):
     if name:
         cfg.setdefault("source", {})["adapter"] = name
     print(f"adapter: {ingest.adapter_name(cfg)}\n")
-    if not os.path.isdir(RAW):
-        print(f"No {os.path.relpath(RAW, ingest.ROOT)}/ yet.\n{ingest.hint(cfg)}")
-        return 1
     rep = ingest.Report()
+    for path in ingest.stranded():
+        rep.warn(f"{os.path.relpath(path, ingest.ROOT)}: that folder is no "
+                 f"longer read — move the file into data/inbox/")
+    if not os.path.isdir(INBOX):
+        rep.print()
+        print(f"No {os.path.relpath(INBOX, ingest.ROOT)}/ yet.\n{ingest.hint(cfg)}")
+        return 1
     try:
-        got = ingest.run(RAW, cfg, rep)
+        got = ingest.run(INBOX, cfg, rep)
     except ingest.AdapterError as e:
         print(f"! {e}")
         return 1

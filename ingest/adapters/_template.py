@@ -26,15 +26,20 @@ from ingest import parsers as p
 
 CONTRACT = 1
 DESCRIPTION = "one line, shown by `python3 -m ingest`"
+# What this adapter reads from data/inbox/. The folder is shared with the
+# .fit readers, so this is how a file of yours avoids being reported as
+# something nothing can open. Leave it out and .csv is assumed.
+EXTENSIONS = (".csv",)
 
 
 def hint(cfg):
-    """Optional. Printed when data/raw/ is empty — say what to put there."""
-    return "Export <what> from <where> into data/raw/."
+    """Optional. Printed when data/inbox/ is empty — say what to put there."""
+    return "Export <what> from <where> into data/inbox/."
 
 
 def ingest(raw_dir, cfg, report):
-    """raw_dir: absolute path to data/raw/
+    """raw_dir: absolute path to data/inbox/ — shared with the .fit readers,
+               so read only what EXTENSIONS names
     cfg:       the merged config (config.example.json over config.py DEFAULTS)
     report:    say what you read and what you skipped — see ingest/report.py
 
@@ -43,7 +48,7 @@ def ingest(raw_dir, cfg, report):
     src = cfg["source"]
     out = Ingested()
 
-    # Sort data/raw/ into kinds by filename substring. Your adapter is free to
+    # Sort the inbox's CSVs into kinds by filename substring. Your adapter is free to
     # ignore this and glob for its own filenames instead.
     files = p.route_files(raw_dir, src["files"], report)
 

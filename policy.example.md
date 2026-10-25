@@ -215,7 +215,7 @@ as a session.
 Once per cycle — for this policy that's weekly, normally Sunday. Set your own
 cadence here and `cycle.days` in `config.json` to match:
 
-1. Export CSVs → `data/raw/` → `python3 build.py`
+1. Export CSVs → `data/inbox/` → `python3 build.py`
 2. Claude interviews, appends to `journal.md`
 3. Claude reads `policy.md` + `context.md` + `journal.md` → writes `plans/YYYY-MM-DD.md`
 

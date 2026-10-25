@@ -5,7 +5,7 @@ Single-session files — one file, one workout, sampled second by second. Drop
 
 There is **nothing to select**. Readers are claimed by file extension, not
 named in config: declare `EXTENSIONS = (".tcx",)` in your file and every `.tcx`
-in `data/activities/` starts going through it. That's the difference from
+in `data/inbox/` starts going through it. That's the difference from
 `../../adapters/local/`, where one adapter owns the whole bulk export and
 `config.source.adapter` picks it.
 

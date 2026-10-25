@@ -1,6 +1,6 @@
 ---
 name: ingest-adapter
-description: Make this repo read the user's fitness data — Strava, Polar, Coros, Whoop, Suunto, Apple Health, Intervals.icu, a hand-rolled CSV, or a single-activity file (.fit, .tcx, .gpx). Use when build.py reports skipped rows or empty columns, when the dashboard is missing a number, when the user says their export isn't Garmin's, or when a file dropped in data/activities/ wasn't read. Covers the config-only path, writing a bulk adapter in ingest/adapters/local/, and writing a single-session reader in ingest/readers/local/.
+description: Make this repo read the user's fitness data — Strava, Polar, Coros, Whoop, Suunto, Apple Health, Intervals.icu, a hand-rolled CSV, or a single-activity file (.fit, .tcx, .gpx). Use when build.py reports skipped rows or empty columns, when the dashboard is missing a number, when the user says their export isn't Garmin's, or when a file dropped in data/inbox/ wasn't read. Covers the config-only path, writing a bulk adapter in ingest/adapters/local/, and writing a single-session reader in ingest/readers/local/.
 ---
 
 # Making this repo read someone else's data
@@ -11,7 +11,7 @@ ACWR, the CSVs, `context.md`, the dashboard, the coach) reads only those.
 
 | | Bulk export | Single session |
 |---|---|---|
-| Folder | `data/raw/` | `data/activities/` |
+| Folder | `data/inbox/` (extensions the adapter declares) | `data/inbox/` (extensions a reader claims) |
 | Shape | Weeks of workouts + sleep + HRV, one row per session | One file, one workout, sampled per second |
 | Code | `ingest/adapters/` | `ingest/readers/` |
 | Contract | `ingest/schema.py` | `ingest/activity.py` |
@@ -19,7 +19,7 @@ ACWR, the CSVs, `context.md`, the dashboard, the coach) reads only those.
 | Inspect | `python3 -m ingest` | `python3 -m ingest --readers` |
 
 Ask which problem you actually have. "My weekly export doesn't load" is an
-adapter. "I dropped a `.tcx` in `data/activities/` and nothing happened" is a
+adapter. "I dropped a `.tcx` in `data/inbox/` and nothing happened" is a
 reader. A user who wants per-second detail — HR inside a session, cadence
 excluding walk breaks — needs a reader, and no amount of adapter work gets it,
 because a bulk export only ever carries one average per session.
@@ -29,13 +29,13 @@ If a data-source problem seems to need a change there, the boundary is wrong —
 say so instead of crossing it. The one exception is `config.json`, the user's
 own untracked file.
 
-## Path A — a bulk export (`data/raw/`)
+## Path A — a bulk export (CSVs etc. in `data/inbox/`)
 
 ### 1. Look at the actual file before deciding anything
 
 ```sh
-ls data/raw/
-head -3 "data/raw/<file>.csv"
+ls data/inbox/
+head -3 "data/inbox/<file>.csv"
 ```
 
 Read the real header and two real rows. Do not write column names from memory
@@ -81,13 +81,13 @@ Read `ingest/README.md` for the contract and `ingest/schema.py` for the field
 list. Use `ingest/parsers.py` rather than re-solving decimal commas and
 duration notations.
 
-## Path B — a single activity file (`data/activities/`)
+## Path B — a single activity file (`.fit` etc. in `data/inbox/`)
 
 ### 1. Check whether a reader already claims that extension
 
 ```sh
 python3 -m ingest --readers
-ls data/activities/
+ls data/inbox/
 ```
 
 `.fit` ships. If the user's file is `.fit` and still didn't read, it's a bug in

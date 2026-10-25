@@ -155,6 +155,11 @@ SPORT_FALLBACK = {1: "Running", 2: "Cycling", 5: "Swimming", 11: "Walking",
 
 # Sports whose cadence FIT stores in revolutions and a human counts in steps.
 FOOT_SPORTS = (1, 11, 17)
+# Sports whose work is covering ground: running, cycling, swimming, walking,
+# skiing (12, 13), rowing (15), hiking, paddling (19). Everything else —
+# generic (0), fitness equipment (4), training (10) — is stationary, where a
+# stop is part of the session rather than a break from it. See Activity.travels.
+TRAVEL_SPORTS = (1, 2, 5, 11, 12, 13, 15, 17, 19)
 SEMICIRCLE = 180.0 / 2 ** 31
 
 
@@ -342,4 +347,4 @@ def read(path, cfg=None):
 
     return Activity(path=path, type=atype, start_local=start_local,
                     session=session, laps=laps, records=records,
-                    is_run=(sport == 1))
+                    is_run=(sport == 1), travels=(sport in TRAVEL_SPORTS))

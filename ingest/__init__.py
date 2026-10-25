@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Ingestion — the only part of this repo that knows what your source exports.
 
-    data/raw/*  ->  [ adapter ]  ->  sessions / sleep / hrv  ->  [ the engine ]
-                     swappable        the contract in            never changes
-                                      schema.py
+    data/inbox/*  ->  [ adapter ]  ->  sessions / sleep / hrv  ->  [ the engine ]
+                       swappable        the contract in            never changes
+                                        schema.py
 
 Everything upstream of the arrow is vendor-shaped and belongs in an adapter.
 Everything downstream — TRIMP, ACWR, the accumulating CSVs, context.md, the
@@ -15,6 +15,7 @@ An adapter is one Python file with one function:
 
     CONTRACT = 1                      # schema version it was written against
     DESCRIPTION = "Strava bulk export"
+    EXTENSIONS = (".csv",)            # what it reads from the inbox; default .csv
 
     def ingest(raw_dir, cfg, report):
         return Ingested(sessions=[...], sleep={...}, hrv={...})
@@ -25,7 +26,11 @@ or `ingest/adapters/` (shipped with the repo), and select it with
 name, so you can bend garmin_csv without editing a tracked file.
 
     python3 -m ingest           list adapters, show which one is active
-    python3 -m ingest --check   run it over data/raw and report field coverage
+    python3 -m ingest --check   run it over data/inbox and report field coverage
+
+The inbox is shared with the single-session readers (activity.py): a reader
+claims its files by extension, the adapter declares EXTENSIONS for the rest, and
+a file neither claims is reported by name rather than left to sit there.
 """
 
 from __future__ import annotations
@@ -47,6 +52,16 @@ ADAPTER_DIRS = [
 ]
 
 DEFAULT_ADAPTER = "garmin_csv"
+
+# The one drop folder, for both paths. They never needed separate homes: a
+# reader claims its files by extension and the adapter declares its own, so
+# "put whatever the watch exported here" is the whole instruction.
+INBOX = os.path.join(ROOT, "data", "inbox")
+# Where the two paths used to live. Not read any more — stranded() names any
+# file still sitting in one, because a file that quietly stopped counting is
+# a load chart that's wrong for reasons nobody can see.
+LEGACY_DIRS = [os.path.join(ROOT, "data", "raw"),
+               os.path.join(ROOT, "data", "activities")]
 
 
 class Ingested:
@@ -136,7 +151,7 @@ def load_adapter(name):
 
 
 def run(raw_dir, cfg, report=None):
-    """Ingest data/raw with the configured adapter, validated against the
+    """Ingest data/inbox with the configured adapter, validated against the
     schema. -> Ingested. Raises AdapterError if the adapter can't be used;
     everything softer than that becomes a line in the report."""
     report = report or Report()
@@ -154,10 +169,39 @@ def run(raw_dir, cfg, report=None):
 
 
 def hint(cfg):
-    """One line telling the user what to put in data/raw for this adapter."""
+    """One line telling the user what to put in data/inbox for this adapter."""
     try:
         mod = load_adapter(adapter_name(cfg))
     except AdapterError as e:
         return str(e)
     fn = getattr(mod, "hint", None)
-    return fn(cfg) if fn else f"Export from {adapter_name(cfg)} into data/raw/."
+    return fn(cfg) if fn else f"Export from {adapter_name(cfg)} into data/inbox/."
+
+
+def adapter_extensions(cfg):
+    """Extensions the active adapter reads from the inbox. -> ('.csv',)
+
+    Only needed because the inbox is shared: analyze.py reports files no
+    reader claims, and without this it would report every CSV export as
+    unreadable. An adapter that doesn't say is assumed to read CSV, which is
+    what both shipped ones do."""
+    try:
+        mod = load_adapter(adapter_name(cfg))
+    except AdapterError:
+        return (".csv",)
+    return tuple(e.lower() for e in getattr(mod, "EXTENSIONS", (".csv",)))
+
+
+def stranded():
+    """Files still sitting in a pre-inbox folder. -> [abs paths]
+
+    Those folders are no longer read, so anything left in one has silently
+    stopped counting — the caller's job is to say so."""
+    out = []
+    for d in LEGACY_DIRS:
+        if not os.path.isdir(d):
+            continue
+        out += [os.path.join(d, f) for f in sorted(os.listdir(d))
+                if not f.startswith(".") and f.lower() != "readme.md"
+                and os.path.isfile(os.path.join(d, f))]
+    return out

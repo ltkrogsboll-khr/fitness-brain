@@ -3,11 +3,11 @@
 Two paths in, both swappable, both ending in records the engine already knows.
 
 ```
-data/raw/*         ->  [ adapter ]  ->  sessions / sleep / hrv  ->  [ engine ]
+data/inbox/*.csv   ->  [ adapter ]  ->  sessions / sleep / hrv  ->  [ engine ]
 one bulk export        swappable        the contract, schema.py     never
 of everything                                                       changes
 
-data/activities/*  ->  [ reader ]   ->  Activity  ->  [ analyze.py ]
+data/inbox/*.fit   ->  [ reader ]   ->  Activity  ->  [ analyze.py ]
 one file, one          swappable        the contract,
 session, per second                     activity.py
 ```
@@ -22,9 +22,12 @@ vendor, so `config.source.adapter` names the adapter. A single-session file is
 self-describing, so readers are claimed by **file extension** and picked per
 file — a `.fit` and a `.tcx` in the same folder both just work.
 
-Everyone drops their exports in the same place: `data/raw/`. What differs
-between a Garmin user and a Strava user is the adapter that reads them —
-one file, selected by one config key.
+Everyone drops everything in the same place: `data/inbox/`, bulk exports and
+single-session files together. Readers claim their extensions; the adapter
+declares its own with `EXTENSIONS` (`.csv` when it doesn't say), so the two
+paths split the folder between them without configuration, and a file neither
+claims is named in the ingest report. What differs between a Garmin user and a
+Strava user is the adapter — one file, selected by one config key.
 
 Downstream of the arrow, nothing knows what a "watch" is. TRIMP, ACWR, the
 accumulating CSVs, `context.md`, the dashboard and the coach read only the

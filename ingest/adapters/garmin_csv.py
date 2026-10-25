@@ -26,6 +26,7 @@ from ingest import parsers as p
 
 CONTRACT = 1
 DESCRIPTION = "Column-mapped CSVs (Garmin Connect by default)"
+EXTENSIONS = (".csv",)
 
 # config.source key holding each kind's column map, for error messages.
 COLUMN_KEY = {"activities": "activity_columns", "sleep": "sleep_columns",
@@ -35,7 +36,7 @@ COLUMN_KEY = {"activities": "activity_columns", "sleep": "sleep_columns",
 def hint(cfg):
     pat = cfg["source"]["files"]
     return ("Export activities, sleep and (optionally) HRV as CSV into "
-            "data/raw/.\nFilenames are matched on the substrings "
+            "data/inbox/.\nFilenames are matched on the substrings "
             + ", ".join(repr(v) for v in pat.values())
             + " (configurable in config.json).")
 

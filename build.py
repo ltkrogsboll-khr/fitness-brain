@@ -11,7 +11,8 @@ sessions/sleep/hrv records in the shape ingest/schema.py defines; everything
 here works on those, so a different data source is an adapter, not an edit.
 
 Run:  python3 build.py
-Input:  data/raw/*     -- read by the adapter named in config.source.adapter
+Input:  data/inbox/*   -- .fit etc. by the reader claiming the extension,
+                          the rest by the adapter in config.source.adapter
 Output: data/daily.csv, data/sessions.csv, context.md
 """
 
@@ -27,11 +28,9 @@ import ingest
 from ingest.parsers import read_csv
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-RAW = os.path.join(ROOT, "data", "raw")
-# Per-activity files (.fit), read at full resolution by analyze.py. Separate
-# from RAW because these are one file per session rather than one export of
-# everything, and because the adapter never sees them.
-ACTIVITIES = os.path.join(ROOT, "data", "activities")
+# Bulk exports and per-activity files (.fit) share one drop folder: the adapter
+# reads the extensions it declares, analyze.py reads the ones a reader claims.
+INBOX = ingest.INBOX
 DAILY = os.path.join(ROOT, "data", "daily.csv")
 SESSIONS = os.path.join(ROOT, "data", "sessions.csv")
 CONTEXT = os.path.join(ROOT, "context.md")
@@ -159,17 +158,23 @@ def fnum(r, k):
 def main():
     today = date.today()
 
-    # First run after a clone: make the drop-boxes rather than fail on them.
-    os.makedirs(ACTIVITIES, exist_ok=True)
-    if not os.path.isdir(RAW):
-        os.makedirs(RAW, exist_ok=True)
-        print(f"Created {os.path.relpath(RAW, ROOT)}/ — it was empty.\n"
+    rep = ingest.Report()
+    # Before the early return below: someone upgrading from the two-folder
+    # layout has exactly an empty inbox and a full data/raw/.
+    for path in ingest.stranded():
+        rep.warn(f"{os.path.relpath(path, ROOT)}: that folder is no longer "
+                 f"read — move the file into data/inbox/")
+
+    # First run after a clone: make the drop-box rather than fail on it.
+    if not os.path.isdir(INBOX):
+        os.makedirs(INBOX, exist_ok=True)
+        rep.print()
+        print(f"Created {os.path.relpath(INBOX, ROOT)}/ — it was empty.\n"
               + ingest.hint(CFG))
         return
 
-    rep = ingest.Report()
     try:
-        got = ingest.run(RAW, CFG, rep)
+        got = ingest.run(INBOX, CFG, rep)
     except ingest.AdapterError as e:
         print(f"Ingest failed: {e}")
         return
@@ -239,7 +244,7 @@ def main():
 
     all_dates = sorted(set(list(sleep.keys()) + list(hrv.keys()) + list(by_day.keys())))
     if not all_dates:
-        print("No usable rows. Drop your exports in data/raw/.\n"
+        print("No usable rows. Drop your exports in data/inbox/.\n"
               "If there are files there already, the Ingest lines above name "
               "what was skipped and which key would fix it; "
               "`python3 -m ingest --check` shows it field by field.")
@@ -349,7 +354,7 @@ def write_context(daily, sess, hr_rest, hr_max, today):
 
     L = []
     L.append("# Coaching context\n")
-    L.append(f"_Generated {datetime.now():%Y-%m-%d %H:%M} from data/raw. "
+    L.append(f"_Generated {datetime.now():%Y-%m-%d %H:%M} from data/inbox. "
              f"Data through {end_d.isoformat()}. Planning cycle: {cyc} days. "
              f"Read `policy.md` before planning._\n")
 
