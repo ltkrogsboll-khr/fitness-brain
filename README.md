@@ -53,7 +53,7 @@ the page and the policy from quoting different ceilings at you.
 | `readiness` | Sleep, RHR and HRV thresholds |
 | `journal` | The fields you score yourself on |
 | `plan` | Session kinds, and how each decides it was done |
-| `source` | Which ingest adapter reads `data/raw/`, and everything it needs to know — filenames, columns, date and duration formats, decimals, units. See [Using a different export](#using-a-different-export) |
+| `source` | Which ingest adapter reads the CSVs in `data/inbox/`, and everything it needs to know — filenames, columns, date and duration formats, decimals, units. See [Using a different export](#using-a-different-export) |
 | `coach` | What the coach calls itself, its escalation rule, and which LLM answers. See [Choosing the coach's LLM](#choosing-the-coachs-llm) |
 
 Anything you leave out falls back to a neutral default, so a partial config is
@@ -112,8 +112,8 @@ you've already saved.
 Run it whenever you plan — every Sunday, every ten days, or whenever the last
 block ran out. Nothing schedules this for you.
 
-1. Export from your data source (e.g. watch, website) into `data/raw/` — activities, sleep, and optionally HRV. Same folder whatever the vendor; see [Using a different export](#using-a-different-export).
-2. Optionally drop single-activity files (`.fit`) into `data/activities/` — see
+1. Export from your data source (e.g. watch, website) into `data/inbox/` — activities, sleep, and optionally HRV. Same folder whatever the vendor; see [Using a different export](#using-a-different-export).
+2. Optionally drop single-activity files (`.fit`) into the same `data/inbox/` — see
    [One session, close up](#one-session-close-up).
 3. `python3 build.py` — ingests, dedupes, derives, writes `context.md`.
 4. Ask the coach for the next block. It reads `policy.md` → `context.md` →
@@ -163,11 +163,11 @@ comparison at any block length.
 
 ## One session, close up
 
-Drop a `.fit` file in `data/activities/` and rebuild. That's it — `build.py`
-reads the folder, so the dashboard's **Rebuild** button is the whole workflow.
+Drop a `.fit` file in `data/inbox/`, next to the CSV exports, and rebuild.
+That's it — `build.py` reads the folder, so the dashboard's **Rebuild** button
+is the whole workflow.
 
-The folder is named for what the files are rather than who wrote them: Garmin,
-Wahoo, Coros and Suunto all export `.fit`, and `.fit` ships (stdlib, no
+Garmin, Wahoo, Coros and Suunto all export `.fit`, and `.fit` ships (stdlib, no
 dependency). Support for another format is a **reader** — the single-session
 sibling of an adapter, claimed by file extension rather than config, so a
 `.fit` and a `.tcx` can sit in the folder together and both just work. Same
@@ -271,13 +271,13 @@ chronic baseline possible.
 
 ## Using a different export
 
-Everyone drops exports in the same place — `data/raw/`. What differs per vendor
+Everyone drops exports in the same place — `data/inbox/`. What differs per vendor
 is the **adapter** that reads them, and nothing downstream of it knows what a
 watch is:
 
 ```
-data/raw/*  →  [ adapter ]  →  sessions / sleep / hrv  →  [ the engine ]
-                swappable       fixed contract            never changes
+data/inbox/*  →  [ adapter ]  →  sessions / sleep / hrv  →  [ the engine ]
+                  swappable       fixed contract            never changes
 ```
 
 Shipped coverage (Garmin-shaped CSV, `.fit`) is necessarily partial — there are

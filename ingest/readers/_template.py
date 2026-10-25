@@ -8,7 +8,7 @@ keeps this template out of the list.
 
 There is nothing to configure afterwards. Readers are picked by file extension,
 so declaring EXTENSIONS below is what puts yours in service — drop a matching
-file in data/activities/ and `python3 build.py` will use it.
+file in data/inbox/ and `python3 build.py` will use it.
 
     python3 -m ingest --readers        check that yours is listed
     python3 analyze.py yourfile.tcx --dry-run    run it, write nothing
@@ -75,4 +75,5 @@ def read(path, cfg=None):
         start_local=None,      # REQUIRED: datetime, LOCAL wall clock, no tzinfo
         session=session, laps=laps, records=records,
         is_run=True,           # True only for running: it enables the walk floor
+        travels=True,          # False for floor/strength/gym: every sample counts
     )

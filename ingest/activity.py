@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One session at full resolution — the contract, and the readers behind it.
 
-    data/activities/*  ->  [ reader ]  ->  Activity  ->  [ analyze.py ]
-                            swappable       this file     never changes
+    data/inbox/*.fit  ->  [ reader ]  ->  Activity  ->  [ analyze.py ]
+                           swappable       this file     never changes
 
 The sibling of `ingest/adapters/`, for the other ingestion path. An adapter
 reads one bulk export of everything; a reader reads one file describing one
@@ -125,7 +125,7 @@ class Activity:
     """
 
     def __init__(self, path, type, start_local, session=None, laps=None,
-                 records=None, is_run=False, title=""):
+                 records=None, is_run=False, title="", travels=True):
         self.path = path
         self.name = os.path.basename(path)
         self.type = type                  # vendor's own word: 'Running', 'Ride'
@@ -136,6 +136,12 @@ class Activity:
         # Whether a cadence floor can separate working from walking. True for
         # runs only: a walk's own cadence sits exactly where that floor goes.
         self.is_run = is_run
+        # Whether the work is covering ground. False for floor, strength and
+        # gym sessions, where standing still between burpees *is* the session:
+        # a speed threshold there keeps only the seconds of GPS drift and
+        # counts a quarter of the work as load. Defaults to True so a reader
+        # that predates this field behaves exactly as it did.
+        self.travels = travels
         self.title = title or ""
 
     def stream(self, field):

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Close analysis of one activity, from the file your watch recorded for it.
 
-    (drop a file in data/activities/, then just rebuild — see below)
+    (drop a file in data/inbox/, then just rebuild — see below)
 
-    python3 analyze.py                          # newest in data/activities/
+    python3 analyze.py                          # newest activity in data/inbox/
     python3 analyze.py --all                    # every file there, once each
     python3 analyze.py ~/Downloads/1234_ACTIVITY.fit
     python3 analyze.py run.fit --hr-cap 140 --cadence 170
     python3 analyze.py run.fit --dry-run        # print, write nothing
 
-Drop activity files in `data/activities/`. That folder is named after what the
-files are, not who made them: Garmin, Wahoo, Coros and Suunto all write .fit,
-while other platforms export .tcx or .gpx for the same run. Which formats work
-is a question of which readers exist in `ingest/readers/` — they are claimed by
-file extension, so a folder holding two formats needs no configuration.
+Drop activity files in `data/inbox/`, next to the bulk CSV exports. Garmin,
+Wahoo, Coros and Suunto all write .fit, while other platforms export .tcx or
+.gpx for the same run. Which formats work is a question of which readers exist
+in `ingest/readers/` — they are claimed by file extension, so a folder holding
+two formats, or a .fit beside a sleep CSV, needs no configuration.
 `python3 -m ingest --readers` lists them; `ingest/activity.py` is the contract
 for writing another.
 
@@ -60,10 +60,11 @@ import os
 import sys
 
 import config
+import ingest
 from ingest import activity
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-ACTIVITIES = os.path.join(ROOT, "data", "activities")
+INBOX = ingest.INBOX
 CFG = config.load()
 
 
@@ -124,12 +125,19 @@ def moving_mask(act, floor):
     is the reason the session average lies. For everything else it's simply
     whether you were moving: a cyclist freewheeling downhill is still riding,
     and a walk is the entire point of a walk.
+
+    And for a session that doesn't travel at all, every sample counts: the
+    pause between two sets of burpees is the workout, and a GPS speed
+    threshold would keep only the drift.
     """
     out = []
+    travels = getattr(act, "travels", True)
     for r in act.records:
         if r.get("t") is None:
             continue
-        if act.is_run:
+        if not travels:
+            out.append((r, True))
+        elif act.is_run:
             c = r.get("cadence")
             out.append((r, c is not None and c >= floor))
         else:
@@ -310,6 +318,22 @@ def analyse(act, hr_cap=None, cadence=None, band=5, floor=140):
 
     out["session_shape"], out["structure_summary"] = session_structure(act)
 
+    # Stationary work: whatever speed and cadence the watch logged is GPS drift
+    # and wrist motion, and a pace or decoupling built from it is a plausible
+    # number describing nothing. HR over the whole session is the measure;
+    # say so in session_shape so the coach doesn't read a missing pace as a
+    # missing session.
+    stationary = not getattr(act, "travels", True)
+    if stationary:
+        cads = [None] * len(cads)
+        spds = [None] * len(spds)
+        for k in ("moving_cadence", "moving_pace_s_per_km", "moving_distance_km"):
+            out[k] = None
+        out["session_shape"] = "stationary"
+        out["structure_summary"] = ("Stationary session: load is HR over the "
+                                    "whole session; pace and distance not "
+                                    "measured.")
+
     # Adherence to the two things the plan actually asked for. Measured for
     # every session, including interval days: the percentage is a true fact
     # about the file either way, and a column that sometimes holds a number
@@ -366,6 +390,10 @@ def summary_row(act, derived):
     s = act.session
     dist_m, spd = s.get("total_distance"), s.get("avg_speed")
     cad = s.get("avg_cadence")   # already in the sport's unit; see activity.py
+    if not getattr(act, "travels", True):
+        # GPS drift on a floor session: 0.1 km at 16 min/km is noise, not a
+        # distance. None, not 0 — the upsert keeps whatever the CSV said.
+        dist_m = spd = cad = None
     row = {
         "datetime": act.start_local.strftime("%Y-%m-%d %H:%M:%S"),
         "date": act.start_local.strftime("%Y-%m-%d"),
@@ -395,7 +423,7 @@ def summary_row(act, derived):
 # --- Finding the files -------------------------------------------------------
 def folder_files(d=None):
     """Every readable activity file in the drop folder, oldest first."""
-    d = d or ACTIVITIES
+    d = d or INBOX
     if not os.path.isdir(d):
         return []
     out = [os.path.join(d, f) for f in sorted(os.listdir(d))
@@ -403,14 +431,17 @@ def folder_files(d=None):
     return sorted(out, key=os.path.getmtime)
 
 
-def unreadable_files(d=None):
+def unreadable_files(d=None, cfg=None):
     """Files sitting in the folder that nothing here can open — worth saying,
-    since 'I dropped it in and nothing happened' is the failure mode."""
-    d = d or ACTIVITIES
+    since 'I dropped it in and nothing happened' is the failure mode. The
+    adapter's extensions count as handled: the folder is shared with the bulk
+    exports, and it is the adapter's job to report a CSV it couldn't place."""
+    d = d or INBOX
     if not os.path.isdir(d):
         return []
+    handled = readable() + ingest.adapter_extensions(cfg or CFG)
     return [f for f in sorted(os.listdir(d))
-            if not f.startswith(".") and not f.lower().endswith(readable())
+            if not f.startswith(".") and not f.lower().endswith(handled)
             and os.path.isfile(os.path.join(d, f))
             and f.lower() != "readme.md"]
 
@@ -436,11 +467,12 @@ def activity_rows(cfg=None, report=None):
                 report.warn(f"{name}: {e}")
             continue
         d = analyse(act, opt["hr_cap"], opt["cadence"], opt["band"], opt["floor"])
-        if not d:
-            if report:
-                report.warn(f"{name}: no speed or cadence readings, so pace/HR "
-                            f"detail couldn't be refined for this session")
-            continue
+        if not d and report:
+            # Still a session: its duration and average HR are in the summary,
+            # and that is enough for TRIMP. Dropping it would be a workout with
+            # no load at all whenever no CSV export happens to cover it.
+            report.warn(f"{name}: no usable per-second records, so only the "
+                        f"watch's session totals count for this one")
         row = summary_row(act, d)
         row["_source_file"] = name           # for the journal marker; dropped below
         rows.append(row)
@@ -450,10 +482,12 @@ def activity_rows(cfg=None, report=None):
             report.file(name, "activity", 1, 1, "",
                         f"{act.type} {act.start_local:%Y-%m-%d %H:%M}, "
                         f"{len(act.records)} records")
-    for f in unreadable_files():
+    for f in unreadable_files(cfg=cfg):
         if report:
-            report.warn(f"data/activities/{f}: no reader handles that format "
-                        f"(have {', '.join(readable()) or 'none'}) — not read")
+            report.warn(f"data/inbox/{f}: nothing reads that format (readers: "
+                        f"{', '.join(readable()) or 'none'}; adapter: "
+                        f"{', '.join(ingest.adapter_extensions(cfg))}) "
+                        f"— not read")
     return rows
 
 
@@ -474,7 +508,8 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
     s = act.session
     L = [f"\n{act.type} — {act.start_local:%a %d %b %Y, %H:%M}   ({act.name})",
          "=" * 64]
-    L.append(f"{row['distance_km']} km in {mmss(row['duration_s'])}"
+    dist = f"{row['distance_km']} km in " if row.get("distance_km") else ""
+    L.append(f"{dist}{mmss(row['duration_s'])}"
              f"   avg {mmss(row['pace_s_per_km'])}/km"
              f"   HR {row['avg_hr']}/{row['max_hr']}"
              f"   cadence {row['cadence']} spm")
@@ -495,7 +530,10 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
                      f"{str(lp.get('max_hr') or '-'):<4} "
                      f"{round(c) if c else '-':>5}")
 
-    L.append("\nWhile moving" + (f" (cadence >= {n(floor)} spm)" if act.is_run else ""))
+    if not getattr(act, "travels", True):
+        L.append("\nWhole session (stationary — every sample counts)")
+    else:
+        L.append("\nWhile moving" + (f" (cadence >= {n(floor)} spm)" if act.is_run else ""))
     L.append(f"  time {mmss(d.get('moving_time_s'))} of {mmss(row['duration_s'])}"
              f"   HR {d.get('moving_avg_hr') or '-'}"
              f"   cadence {d.get('moving_cadence') or '-'} spm"
@@ -523,8 +561,9 @@ def report_text(act, row, d, hr_cap, cadence, band, floor):
     if d.get("walk_break_s"):
         L.append(f"  breaks inside the session: {d['walk_break_s']} s")
     if d.get("hr_drift_bpm") is not None:
+        dec = d.get("decoupling_pct")
         L.append(f"  HR drift 1st->2nd half: {d['hr_drift_bpm']:+} bpm"
-                 f"   decoupling {d.get('decoupling_pct', 0):+}%")
+                 + (f"   decoupling {dec:+}%" if dec is not None else ""))
     return "\n".join(L)
 
 
@@ -537,7 +576,22 @@ def journal_line(act_name, row, d, hr_cap, cadence, band):
     sessions.csv; what they are not is a verdict on a day that was never
     meant to stay under an easy cap, and this line is what the coach reads.
     """
-    bits = [f"{row['distance_km']} km in {mmss(row['duration_s'])}"]
+    if d.get("session_shape") == "stationary" or not d:
+        # Floor work, or a file with nothing per-second: no pace, no cadence
+        # band, no HR-cap verdict — an easy-run cap says nothing about a set
+        # of burpees. Duration and HR are what there is.
+        hr = d.get("moving_avg_hr") or row.get("avg_hr")
+        bits = [mmss(row["duration_s"])]
+        if hr:
+            bits.append(f"HR {n(hr)} avg"
+                        + (f", {n(row['max_hr'])} max" if row.get("max_hr") else ""))
+        how = ("whole session counted as work" if d
+               else "session totals only, no per-second records")
+        return (f"{row['date']} | note: {row['type']} — " + "; ".join(bits)
+                + f" ({how}). [from {act_name}]")
+
+    dist = f"{row['distance_km']} km in " if row.get("distance_km") else ""
+    bits = [f"{dist}{mmss(row['duration_s'])}"]
     if d.get("session_shape") == "intervals" and d.get("structure_summary"):
         bits.append(d["structure_summary"].rstrip("."))
         if d.get("moving_avg_hr"):
@@ -642,8 +696,8 @@ def analyse_one(path, a, cfg):
 
     d = analyse(act, a.hr_cap, a.cadence, a.band, a.floor)
     if not d:
-        print(f"{act.name}: no usable records — nothing to analyse.")
-        return 1
+        print(f"{act.name}: no usable per-second records — the session totals "
+              f"still count for load.")
     row = summary_row(act, d)
 
     hr_max = cfg["athlete"]["hr_max_override"]
@@ -703,7 +757,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Close analysis of one activity file (.fit).")
     ap.add_argument("path", nargs="?",
-                    help="file or folder; default: newest in data/activities/")
+                    help="file or folder; default: newest in data/inbox/")
     ap.add_argument("--all", action="store_true",
                     help="every file in the folder, not just the newest")
     ap.add_argument("--hr-cap", type=float, default=opt["hr_cap"],
@@ -721,10 +775,10 @@ def main(argv=None):
 
     paths = resolve(a.path, a.all)
     if not paths:
-        os.makedirs(ACTIVITIES, exist_ok=True)
+        os.makedirs(INBOX, exist_ok=True)
         print(f"Nothing to analyse. Put activity files "
               f"({', '.join(readable()) or 'no readers installed'}) in "
-              f"{os.path.relpath(ACTIVITIES, ROOT)}/ and run this again —\n"
+              f"{os.path.relpath(INBOX, ROOT)}/ and run this again —\n"
               f"or just press Rebuild in the dashboard, which reads the same "
               f"folder.")
         for f in unreadable_files():

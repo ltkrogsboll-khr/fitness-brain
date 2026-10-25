@@ -10,10 +10,16 @@ rather than doing quietly.
 ## The one boundary that matters
 
 ```
-data/raw/*         ->  [ adapter ]  ->  sessions / sleep / hrv  ->  [ engine ]
-data/activities/*  ->  [ reader  ]  ->  Activity                    never
-                        swappable        the contracts               changes
+data/inbox/*.csv  ->  [ adapter ]  ->  sessions / sleep / hrv  ->  [ engine ]
+data/inbox/*.fit  ->  [ reader  ]  ->  Activity                    never
+                       swappable        the contracts               changes
 ```
+
+One drop folder for both: a reader claims its files by extension, the adapter
+declares `EXTENSIONS` for the rest (`.csv` if it doesn't say), and a file
+neither claims is reported by name. `data/raw/` and `data/activities/` are the
+old two-folder layout — not read any more, and `build.py` warns about any file
+still left in one.
 
 Everything upstream of the arrows is vendor-shaped and belongs in `ingest/`.
 Everything downstream — TRIMP, ACWR, the accumulating CSVs, `context.md`, the
@@ -79,7 +85,7 @@ it sees one workout counted twice, rather than letting the load quietly double.
 
 ## Refreshing a raw export
 
-`data/raw/` files of the same kind merge by filename sort order
+Bulk-export files of the same kind in `data/inbox/` merge by filename sort order
 (`ingest/parsers.py:route_files`), not by recency — so when a new export's
 date range overlaps an older file's, whichever name sorts last wins on the
 overlap, silently. A numbered re-export (`Sleep-2.csv`) usually sorts *before*

@@ -52,7 +52,7 @@
     "unit": "spm",
     "target": 168,
     "floor": 162,
-    "rationale": "<p>At any given pace, more steps per minute means a shorter stride, a foot landing closer under your hip, less braking on each contact and less vertical drop into it. The same work gets spread over more, lighter impacts, and peak load through the tibia falls — raising cadence around 5–10% is the form change with the most evidence behind it, and it's trainable in weeks with nothing but a metronome.</p><p>The thing to look for is whether <b>slow</b> runs hold their turnover — but read this number carefully, because <b>the vendor's session average includes the walking</b>. A run with walk breaks, or one that ends in a cooldown walk, reports far below the turnover you actually held: 154 spm on a run held at 171 for sixteen straight minutes. So a sagging easy run has two very different explanations — you loafed the stride out (the loading pattern to avoid), or you simply walked part of it — and they call for opposite responses.</p><p>Where a <code>.fit</code> file exists in <code>data/activities/</code>, <code>moving_cadence</code> excludes the walking and is the honest number. Point <code>field</code> at it once you have enough of them; sessions without a file will show blank rather than wrong.</p>"
+    "rationale": "<p>At any given pace, more steps per minute means a shorter stride, a foot landing closer under your hip, less braking on each contact and less vertical drop into it. The same work gets spread over more, lighter impacts, and peak load through the tibia falls — raising cadence around 5–10% is the form change with the most evidence behind it, and it's trainable in weeks with nothing but a metronome.</p><p>The thing to look for is whether <b>slow</b> runs hold their turnover — but read this number carefully, because <b>the vendor's session average includes the walking</b>. A run with walk breaks, or one that ends in a cooldown walk, reports far below the turnover you actually held: 154 spm on a run held at 171 for sixteen straight minutes. So a sagging easy run has two very different explanations — you loafed the stride out (the loading pattern to avoid), or you simply walked part of it — and they call for opposite responses.</p><p>Where a <code>.fit</code> file exists in <code>data/inbox/</code>, <code>moving_cadence</code> excludes the walking and is the honest number. Point <code>field</code> at it once you have enough of them; sessions without a file will show blank rather than wrong.</p>"
   },
 
   "benchmark": {
@@ -62,7 +62,7 @@
     "rationale": "<p>Expect it to look worse for 2–3 weeks while cadence rewires; that cost is known and priced in.</p>"
   },
 
-  "_analysis_comment": "What the current plan asked of a single session, measured against the .fit file in data/activities/. Update these when the plan changes; override per run with `python3 analyze.py run.fit --hr-cap 145`. walk_cadence_floor is what separates running from walking — the whole reason to read the file rather than the CSV average.",
+  "_analysis_comment": "What the current plan asked of a single session, measured against the .fit file in data/inbox/. Update these when the plan changes; override per run with `python3 analyze.py run.fit --hr-cap 145`. walk_cadence_floor is what separates running from walking — the whole reason to read the file rather than the CSV average.",
   "analysis": {
     "hr_cap": 140,
     "cadence_target": 170,
@@ -106,7 +106,7 @@
     }
   },
 
-  "_source_comment": "Everything below is already the default — it is spelled out here only to show what the knobs are. Delete the whole block unless your export differs. `adapter` picks which file in ingest/adapters/ reads data/raw/; garmin_csv is column-mapped rather than Garmin-specific, so a different vendor's CSV is often just different column names here. If a number goes missing, run `python3 -m ingest --check`: it names the file, the column, and how many records carried each field.",
+  "_source_comment": "Everything below is already the default — it is spelled out here only to show what the knobs are. Delete the whole block unless your export differs. `adapter` picks which file in ingest/adapters/ reads the CSVs in data/inbox/; garmin_csv is column-mapped rather than Garmin-specific, so a different vendor's CSV is often just different column names here. If a number goes missing, run `python3 -m ingest --check`: it names the file, the column, and how many records carried each field.",
   "source": {
     "name": "your watch",
     "adapter": "garmin_csv",
