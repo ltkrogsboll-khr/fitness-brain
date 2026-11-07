@@ -136,6 +136,14 @@ DEFAULTS = {
         "journal": True,            # also append a line to journal.md
     },
 
+    # The dashboard's 14-day panel: one lane per activity type done in the last
+    # `lane_days`. `labels` renames a type for display only -- your watch may
+    # file a floor session under "Other" -- and changes nothing in the data.
+    "timeline": {
+        "lane_days": 56,
+        "labels": {},
+    },
+
     "readiness": {
         "sleep_score_warn": 70,
         "sleep_debt_h": 2.0,
@@ -155,6 +163,10 @@ DEFAULTS = {
     },
 
     "plan": {
+        # false turns the coach into an adviser: no plan is written, read or
+        # rendered, and the preamble tells it to suggest rather than schedule.
+        # For an athlete who finds a day-by-day block more pressure than help.
+        "enabled": True,
         # Kinds usable in a plan's ```cycle block (```week is the old fence
         # name and still parses), and how each one decides it was done.
         # complete_when: primary_volume | any_activity |

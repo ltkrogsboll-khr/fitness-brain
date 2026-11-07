@@ -163,6 +163,49 @@ def build_preamble(cfg):
         f"{k} (untracked -- no data will ever exist for it either way)"
         if s.get("complete_when") == "untracked" else k
         for k, s in cfg["plan"]["kinds"].items()) or "work, rest"
+    # With plans off the coach still has the same rules and data -- it just
+    # answers with advice instead of publishing a schedule, and is told so,
+    # because a model left to its defaults reaches for a weekly plan.
+    if cfg["plan"].get("enabled", True):
+        plan_section = f"""
+WRITING A PLAN
+You cannot write files. The only things that leave this conversation are the
+two markers on this page — so if you describe a plan without the marker below,
+nothing is saved and the dashboard goes on showing the old one. Never tell the
+athlete you have updated, saved or written a plan unless you emitted it.
+
+To publish a training block, wrap the whole plan document in:
+
+    [[plan: YYYY-MM-DD]]
+    # <title>
+    …the full plan in markdown…
+    [[/plan]]
+
+The date is the plan's first day and becomes its filename; the newest file in
+plans/ is the one the dashboard reads. The markers are stripped and the plan
+itself stays visible, so write it for the athlete to read, not as machinery.
+
+It MUST contain a fenced ```cycle block, one line per day, or the dashboard
+renders no day strip:
+
+    ```cycle
+    YYYY-MM-DD | <kind> | <short title> | <detail>
+    ```
+
+Kinds available: {kinds}. Write every day of the block, including rest days.
+Only emit a plan when asked for one, or when a rule clearly forces a change to
+the current block — and say what changed and why.
+"""
+    else:
+        plan_section = """
+ADVICE, NOT PLANS
+The athlete does not want plans written for them. Do not produce a weekly
+schedule, a day-by-day block, or a calendar, and do not emit a [[plan: ...]]
+marker. Advise and suggest instead: what would make sense today or this week,
+what to watch for, and why -- as options they can take or leave. If they
+explicitly ask for a rough week outline, keep it loose, a few lines of prose,
+not a timetable.
+"""
     return f"""You are the athlete's {c['role']} for {c['system']}.
 
 Below are three documents. Treat them as authoritative:
@@ -222,34 +265,6 @@ ending your reply with a line in exactly this form:
 
 It is stripped from what they see and appended to journal.md verbatim.
 
-WRITING A PLAN
-You cannot write files. The only things that leave this conversation are the
-two markers on this page — so if you describe a plan without the marker below,
-nothing is saved and the dashboard goes on showing the old one. Never tell the
-athlete you have updated, saved or written a plan unless you emitted it.
-
-To publish a training block, wrap the whole plan document in:
-
-    [[plan: YYYY-MM-DD]]
-    # <title>
-    …the full plan in markdown…
-    [[/plan]]
-
-The date is the plan's first day and becomes its filename; the newest file in
-plans/ is the one the dashboard reads. The markers are stripped and the plan
-itself stays visible, so write it for the athlete to read, not as machinery.
-
-It MUST contain a fenced ```cycle block, one line per day, or the dashboard
-renders no day strip:
-
-    ```cycle
-    YYYY-MM-DD | <kind> | <short title> | <detail>
-    ```
-
-Kinds available: {kinds}. Write every day of the block, including rest days.
-Only emit a plan when asked for one, or when a rule clearly forces a change to
-the current block — and say what changed and why.
-
 Write one only for things worth re-reading weeks from now: {c['journal_examples']}.
 The scored fields ({fields}) are optional -- omit any the athlete didn't mention,
 and use the date they are describing, not necessarily today.
@@ -257,7 +272,7 @@ and use the date they are describing, not necessarily today.
 Do NOT write one for: questions, plan explanations, anything already in the
 journal, or your own advice. Most turns need no journal line at all. One line
 maximum per reply.
-"""
+{plan_section}"""
 
 
 def read(path, default=""):
@@ -418,7 +433,6 @@ def build_payload():
     # Headline stats
     dated = [r for r in daily if r.get("date")]
     dated.sort(key=lambda r: r["date"])
-    last14 = dated[-14:]
     slept = [r for r in dated if fl(r, "sleep_score")]
     last_sleep = slept[-1] if slept else {}
     hrv_rows = [r for r in dated if fl(r, "hrv_night")]
@@ -426,6 +440,14 @@ def build_payload():
 
     def wsum(rs, k):
         return round(sum(fl(r, k) or 0.0 for r in rs), 1)
+
+    def rhr_base(i):
+        """Mean RHR over the 28 days *before* day i. Trailing, not centred, so
+        a run of elevated mornings can't drag its own baseline up and hide —
+        and per day, so each timeline dot is judged the way it was that day."""
+        prior = [fl(r, "rhr") for r in dated[max(0, i - 28):i]]
+        prior = [v for v in prior if v]
+        return round(sum(prior) / len(prior), 1) if len(prior) >= 7 else None
 
     # ACWR keeps its standard 7:28-day definition whatever the cycle length is
     # -- the ceilings you'd read anywhere else are quoted against those windows.
@@ -445,6 +467,37 @@ def build_payload():
                            "trimp": fl(r, "trimp"),
                            "activities": r.get("activities")}
                for r in dated}
+
+    # The 14-day panel is about what was done, so it reads sessions, not the
+    # daily rollup -- "Running, Other" in daily.csv can't say how long either
+    # one was. Lanes are every type done in the last `lane_days`, not just in
+    # the 14 shown: a fortnight off the bike should read as an empty cycling
+    # lane, not as cycling having never existed. A new sport gets a lane the
+    # first time it's recorded, with nothing to configure.
+    tl = CFG["timeline"]
+    window = {r["date"] for r in dated[-14:]}
+    if dated:
+        lane_from = (dt.date.fromisoformat(dated[-1]["date"])
+                     - dt.timedelta(days=tl["lane_days"] - 1)).isoformat()
+    else:
+        lane_from = ""
+    lane_sess = sorted((r for r in sess if r.get("type") and
+                        (r.get("date") or "") >= lane_from),
+                       key=lambda r: r.get("datetime", ""))
+    lanes, by_day = [], {}
+    for r in lane_sess:
+        if r["type"] not in lanes:
+            lanes.append(r["type"])
+        if r["date"] in window:
+            by_day.setdefault(r["date"], []).append({
+                "type": r["type"],
+                "min": round((fl(r, "duration_s") or 0) / 60),
+                "km": fl(r, "distance_km"),
+                "trimp": fl(r, "trimp"),
+                "hr": fl(r, "avg_hr"),
+            })
+    # Most-done first, so the lane order is stable and the main sport is on top.
+    lanes.sort(key=lambda t: -sum(r["type"] == t for r in lane_sess))
 
     context_path = os.path.join(ROOT, "context.md")
     return {
@@ -467,10 +520,15 @@ def build_payload():
                 "date": r["date"], "dow": r.get("dow"),
                 "primary_km": fl(r, "primary_km"), "trimp": fl(r, "trimp"),
                 "sleep_score": fl(r, "sleep_score"), "rhr": fl(r, "rhr"),
-                "hrv_night": fl(r, "hrv_night"), "bb": fl(r, "body_battery"),
+                "rhr_base": rhr_base(i),
+                "hrv_night": fl(r, "hrv_night"),
+                "hrv_lo": fl(r, "hrv_base_lo"), "hrv_hi": fl(r, "hrv_base_hi"),
+                "bb": fl(r, "body_battery"),
                 "activities": r.get("activities") or "",
-            } for r in last14
+                "sessions": by_day.get(r["date"], []),
+            } for i, r in enumerate(dated) if i >= len(dated) - 14
         ],
+        "lanes": [{"type": t, "label": tl["labels"].get(t, t)} for t in lanes],
         "stats": {
             "mech_acute": ac_im, "mech_chronic": ch_im, "mech_ref": ref_im,
             "mech_acwr": round(ac_im / ch_im, 2) if ch_im else None,
@@ -583,7 +641,11 @@ class Handler(BaseHTTPRequestHandler):
             f.write(f"\n## {now:%Y-%m-%d %H:%M}\n\n"
                     f"**me:** {question.strip()}\n\n**coach:** {clean}\n")
 
-        return self.save_journal(reply), self.save_plan(reply)
+        # With plans off, a stray marker is left as text rather than written:
+        # a file in plans/ would quietly re-enable the day strip and the
+        # coach's own LATEST PLAN section.
+        planned = self.save_plan(reply) if CFG["plan"].get("enabled", True) else None
+        return self.save_journal(reply), planned
 
     def save_journal(self, reply):
         m = self.JOURNAL_RE.search(reply)
@@ -650,14 +712,17 @@ class Handler(BaseHTTPRequestHandler):
 
         journal = "\n".join(
             l for l in read("journal.md").splitlines() if l.startswith("20"))
-        plans = sorted(os.listdir(os.path.join(ROOT, "plans"))) \
-            if os.path.isdir(os.path.join(ROOT, "plans")) else []
-        latest_plan = read(f"plans/{plans[-1]}") if plans else "(none yet)"
+        plan_block = ""
+        if CFG["plan"].get("enabled", True):
+            plans = sorted(os.listdir(os.path.join(ROOT, "plans"))) \
+                if os.path.isdir(os.path.join(ROOT, "plans")) else []
+            latest_plan = read(f"plans/{plans[-1]}") if plans else "(none yet)"
+            plan_block = f"===== LATEST PLAN =====\n{latest_plan}\n\n"
 
         system_text = (f"{build_preamble(CFG)}\n\n"
                         f"===== POLICY (binding) =====\n{read('policy.md')}\n\n"
                         f"===== CONTEXT (generated) =====\n{read('context.md')}\n\n"
-                        f"===== LATEST PLAN =====\n{latest_plan}\n\n"
+                        f"{plan_block}"
                         f"===== JOURNAL =====\n{journal}\n")
 
         self.send_response(200)

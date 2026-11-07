@@ -78,6 +78,16 @@ details.dis>summary:hover{color:var(--ink)}
 details.dis>summary .cnt{margin-left:auto;font-weight:400;color:var(--muted);
   font-size:12px;text-align:right}
 details.dis .body{padding:2px 14px 14px}
+/* A panel that never folds — the same box and header, minus the chevron and
+   the pointer. For the one view worth a glance every visit: hiding it behind a
+   click means it stops being glanced at. */
+.panel{background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;margin-top:8px}
+.panel>.hd{padding:11px 14px;display:flex;align-items:center;gap:9px;
+  font-size:13px;font-weight:600;color:var(--ink2)}
+.panel>.hd .cnt{margin-left:auto;font-weight:400;color:var(--muted);
+  font-size:12px;text-align:right}
+.panel .body{padding:2px 14px 14px}
 /* --- plan ----------------------------------------------------------------- */
 .today{display:flex;gap:14px;align-items:flex-start;padding:17px 19px;
   border-radius:12px;background:var(--surface);border:1px solid var(--border);
@@ -145,6 +155,35 @@ th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;
   border-bottom:1px solid var(--axis)}
 td{padding:5px 8px;border-bottom:1px solid var(--grid)}
 tr:last-child td{border-bottom:none}
+/* --- 14-day timeline -------------------------------------------------------- */
+/* One column per day, so the whole column is the hover target and the eye
+   reads down a day or across a sport. Load is the only magnitude, so it is
+   the only bar; each activity lane is done-or-not, so it is a dot. Readiness
+   lives in the status card above — this panel is what was trained. */
+.tl{display:grid;grid-template-columns:auto repeat(14,minmax(0,1fr));gap:0 2px}
+.tl .col{display:flex;flex-direction:column;align-items:center;gap:8px;
+  padding:4px 0 5px;border-radius:6px;min-width:0}
+.tl .col.day-c{cursor:default}
+.tl .col.day-c:hover,.tl .col.day-c:focus-visible{background:var(--page);outline:none}
+.tl .col.wk{box-shadow:inset 1px 0 0 var(--grid)}
+.tl .lab{align-items:flex-end;padding-right:8px}
+.tl .b{height:46px;width:100%;display:flex;align-items:flex-end;justify-content:center;
+  border-bottom:1px solid var(--axis)}
+.tl .lab .b{height:46px;border-bottom:none;align-items:flex-end;padding-bottom:2px}
+.tl .bar{width:min(12px,62%);background:var(--ink2);border-radius:4px 4px 0 0}
+.tl .ln{height:10px;display:flex;align-items:center;justify-content:center;
+  font-size:11px;color:var(--muted);white-space:nowrap}
+.tl .ln .dot{width:8px;height:8px;margin:0}
+.dot.act{background:var(--ink2)}
+.tl .dl{display:flex;flex-direction:column;align-items:center;line-height:1.2;
+  font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tl .dl b{font-weight:600;color:var(--ink2)}
+.tl .last .dl b{color:var(--ink)}
+.tl-key{margin:10px 0 0;flex-wrap:wrap}
+.tl-key .dot{width:7px;height:7px;margin:0}
+.tl-table{margin-top:8px}
+.tl-table>summary{cursor:pointer;font-size:11.5px;color:var(--muted);user-select:none}
+.tl-table table{margin-top:6px}
 .legend{display:flex;gap:14px;font-size:11.5px;color:var(--ink2);margin-bottom:6px}
 .legend span{display:flex;align-items:center;gap:5px}
 .sw{width:9px;height:9px;border-radius:2px}
@@ -164,7 +203,7 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 #ingest.bad{border-color:var(--warn)}
 #log{min-height:40px;max-height:440px;overflow:auto;display:flex;
   flex-direction:column;gap:12px;padding:2px}
-#log:empty::before{content:"Ask about the plan, a rule, how a session went, or what to do about today.";
+#log:empty::before{content:"Ask about a rule, how a session went, or what to do about today.";
   color:var(--muted);font-size:13px}
 .msg{max-width:88%;padding:9px 12px;border-radius:11px;white-space:pre-wrap;
   word-wrap:break-word}
@@ -199,6 +238,7 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
 <pre id="ingest"></pre>
 <div id="status"></div>
 
+<div id="plansec">
 <h2>Plan <span class="sub" id="planname"></span></h2>
 <div id="todaycard"></div>
 
@@ -206,6 +246,7 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
   <summary><span id="planrest">Rest of the plan</span> <span class="cnt" id="plancnt"></span></summary>
   <div class="body"><div class="strip" id="strip"></div></div>
 </details>
+</div>
 
 <h2>Detail</h2>
 
@@ -214,10 +255,14 @@ input:focus,textarea:focus{outline:1.5px solid var(--ink2);outline-offset:-1px}
   <div class="body"><div class="charts" id="charts"></div></div>
 </details>
 
-<details class="dis">
-  <summary>Last 14 days <span class="cnt">activities, sleep, RHR, HRV</span></summary>
-  <div class="body"><table id="t14"></table></div>
-</details>
+<section class="panel">
+  <div class="hd">Last 14 days <span class="cnt">activities and load · hover a day</span></div>
+  <div class="body">
+    <div class="tl" id="tl"></div>
+    <div class="legend tl-key" id="tlkey"></div>
+    <details class="tl-table"><summary>As a table</summary><table id="t14"></table></details>
+  </div>
+</section>
 
 <details class="dis">
   <summary>Journal <span class="cnt" id="jcnt"></span></summary>
@@ -360,7 +405,9 @@ function wireHelp(){
 }
 addEventListener('click', e => { if(!help.contains(e.target)) unpin(); });
 addEventListener('keydown', e => { if(e.key==='Escape'){ unpin(); hideHelp(); } });
-addEventListener('scroll', () => { unpin(); hideHelp(); }, true);
+addEventListener('scroll', () => { unpin(); hideHelp(); hideTip(); }, true);
+// A tapped timeline day shows its box until the next tap anywhere else.
+addEventListener('click', e => { if(!e.target.closest('.day-c')) hideTip(); });
 
 function el(tag, attrs={}, kids=[]){
   const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -667,7 +714,7 @@ function assess(){
             ${many?'have':'has'} not come in yet, so ${many?'they are':'it is'} not part of this
             verdict — treat it as clear on ${cs.length - gaps.length} of ${cs.length}.`}
     : {lvl:0, head:'Nothing is outside its limit',
-       why:'Every channel is inside its ceiling and readiness is normal. Run the plan as written.'}];
+       why:`Every channel is inside its ceiling and readiness is normal. ${C.plan.enabled === false ? 'Nothing needs changing today.' : 'Run the plan as written.'}`}];
 
   return {checks:cs, items, lvl, verdict, gap, dotLvl: blind ? null : lvl};
 }
@@ -693,6 +740,10 @@ let picked = null;
 function renderPlan(){
   /* The plan is whatever dated lines the block holds — five days, ten, a
      fortnight. Nothing here counts to seven. */
+  // plan.enabled false: the coach advises instead of scheduling, so there
+  // is no strip to draw and an empty "No plan found" card would read as broken.
+  $('#plansec').style.display = C.plan.enabled === false ? 'none' : '';
+  if(C.plan.enabled === false) return;
   const wk = D.plan_days || [];
   $('#planname').textContent = D.plan_name ? `· ${D.plan_name.replace('.md','')}` : '';
   $('#planrest').textContent = `Rest of the ${CYCN()}`;
@@ -837,13 +888,14 @@ function render(){
   renderCharts();
   renderJournalInput();
 
-  const pu = C.primary.enabled ? `${C.primary.label} ${C.primary.unit}` : DU();
+  renderTimeline();
+
+  const lanes = D.lanes || [];
   $('#t14').innerHTML =
-    `<tr><th>Date</th><th>Day</th><th>Activities</th><th>${pu}</th><th>${C.aerobic.unit}</th><th>Sleep</th><th>RHR</th><th>HRV</th></tr>` +
+    `<tr><th>Date</th><th>Day</th>${lanes.map(l=>`<th>${l.label}</th>`).join('')}<th>${C.aerobic.unit}</th></tr>` +
     D.last14.slice().reverse().map(r=>`<tr><td>${r.date}</td><td>${r.dow||''}</td>
-      <td>${r.activities||'–'}</td><td>${r.primary_km?fmt(r.primary_km,2):'–'}</td>
-      <td>${r.trimp?fmt(r.trimp,0):'–'}</td><td>${r.sleep_score?fmt(r.sleep_score,0):'–'}</td>
-      <td>${r.rhr?fmt(r.rhr,0):'–'}</td><td>${r.hrv_night?fmt(r.hrv_night,0):'–'}</td></tr>`).join('');
+      ${lanes.map(l=>`<td>${laneCell(r,l.type)}</td>`).join('')}
+      <td>${r.trimp?fmt(r.trimp,0):'–'}</td></tr>`).join('');
 
   $('#jcnt').textContent = `${D.journal.length} entr${D.journal.length===1?'y':'ies'} · last ${
     (D.journal.at(-1)||'').slice(0,10) || '–'}`;
@@ -852,6 +904,68 @@ function render(){
   $('#hint').innerHTML = D.has_key ? '' :
     '<span class="err">Chat disabled — no API key found. Run '
     + '<code>./.venv/bin/python serve.py --set-key</code> once and restart with <code>./run.sh</code>.</span>';
+}
+
+// --- 14-day timeline ------------------------------------------------------------
+/* One lane per activity type the server found in the last timeline.lane_days,
+   in the order it sent them (most-done first). An empty cell means nothing of
+   that type was recorded — unlike a readiness dot, that is the data, not a gap
+   in it, so it draws nothing rather than a hollow "no reading" dot. */
+const laneLabel = t => ((D.lanes||[]).find(l=>l.type===t)||{}).label || t;
+const ofType = (r, t) => (r.sessions||[]).filter(x=>x.type===t);
+function sessText(x){
+  const p = [`${x.min} min`];
+  if(x.km) p.push(`${fmt(x.km,2)} km`);
+  if(x.hr) p.push(`${fmt(x.hr,0)} bpm`);
+  if(x.trimp) p.push(`${fmt(x.trimp,0)} ${C.aerobic.unit}`);
+  return `${laneLabel(x.type)}  ${p.join(' · ')}`;
+}
+function laneCell(r, t){
+  const xs = ofType(r, t);
+  if(!xs.length) return '–';
+  const min = xs.reduce((a,x)=>a+x.min,0), km = xs.reduce((a,x)=>a+(x.km||0),0);
+  return `${min} min${km>=0.5 ? ` · ${fmt(km,1)} km` : ''}`;
+}
+function dayText(r){
+  const d = new Date(r.date+'T12:00:00');
+  const L = [d.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short'})];
+  const xs = r.sessions||[];
+  if(!xs.length) L.push('Rest');
+  xs.forEach(x => L.push(sessText(x)));
+  if(xs.length > 1 && r.trimp) L.push(`Day total ${fmt(r.trimp,0)} ${C.aerobic.unit}`);
+  return L.join('\n');
+}
+function renderTimeline(){
+  const rows = D.last14, lanes = D.lanes || [];
+  const max = Math.max(...rows.map(r=>r.trimp||0)) || 1;
+  const lab = `<div class="col lab">
+      <div class="b ln">${C.aerobic.unit}</div>
+      ${lanes.map(l=>`<div class="ln">${l.label}</div>`).join('')}
+      <div class="dl">&nbsp;<br>&nbsp;</div></div>`;
+  const cols = rows.map((r,i)=>{
+    const d = new Date(r.date+'T12:00:00');
+    const h = r.trimp ? Math.max(3, Math.round(r.trimp/max*44)) : 0;
+    return `<div class="col day-c${d.getDay()===1 && i ? ' wk':''}${i===rows.length-1?' last':''}"
+        data-i="${i}" tabindex="0" aria-label="${dayText(r).replace(/\n/g,'. ').replace(/"/g,'&quot;')}">
+      <div class="b">${h ? `<div class="bar" style="height:${h}px"></div>` : ''}</div>
+      ${lanes.map(l=>`<div class="ln">${ofType(r,l.type).length ? '<i class="dot act"></i>' : ''}</div>`).join('')}
+      <div class="dl"><span>${d.toLocaleDateString(undefined,{weekday:'narrow'})}</span>
+        <b>${d.getDate()}</b></div></div>`;
+  }).join('');
+  const tl = $('#tl');
+  tl.innerHTML = lab + cols;
+  tl.querySelectorAll('.day-c').forEach(c=>{
+    const text = dayText(rows[+c.dataset.i]);
+    c.addEventListener('mousemove', e => showTip(e, text));
+    c.addEventListener('mouseleave', hideTip);
+    // No hover on a phone: a tap shows the same box, and the page's scroll
+    // handler already clears it.
+    c.addEventListener('click', e => showTip(e, text));
+  });
+  $('#tlkey').innerHTML =
+    `<span><i class="dot act"></i>trained that day — hover for time, distance, load</span>`
+    + `<span><i class="sw" style="background:var(--ink2)"></i>${C.aerobic.unit}, scaled to the 14-day high (${fmt(max,0)})</span>`
+    + (lanes.length ? '' : '<span>no activities recorded yet</span>');
 }
 
 async function load(){
