@@ -10,17 +10,26 @@ Reading the export is not this file's job. `ingest/` does that and hands back
 sessions/sleep/hrv records in the shape ingest/schema.py defines; everything
 here works on those, so a different data source is an adapter, not an edit.
 
-Run:  python3 build.py
+Run:  python3 build.py                 # then moves what it read to data/archive/
+      python3 build.py --keep-inbox    # leave the inbox as it is
 Input:  data/inbox/*   -- .fit etc. by the reader claiming the extension,
                           the rest by the adapter in config.source.adapter
 Output: data/daily.csv, data/sessions.csv, context.md
+
+The inbox is a queue, not a store: once a file's rows are in the CSVs it moves
+to data/archive/<date>/. Moving one back into the inbox re-reads it — safe,
+since the upsert is keyed — but its values then win over anything newer for
+the dates it covers, so do that to repair a bad build, not as a habit.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
+import hashlib
 import math
 import os
+import shutil
 from datetime import date, datetime, timedelta
 
 import config
@@ -31,6 +40,11 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # Bulk exports and per-activity files (.fit) share one drop folder: the adapter
 # reads the extensions it declares, analyze.py reads the ones a reader claims.
 INBOX = ingest.INBOX
+ARCHIVE = ingest.ARCHIVE
+# Resting HR moves with fitness, so it is a trailing window rather than an
+# all-time mean. Half a year is long enough that one bad week of sleep doesn't
+# rescale TRIMP, short enough to follow a real change in base fitness.
+RHR_WINDOW_DAYS = 180
 DAILY = os.path.join(ROOT, "data", "daily.csv")
 SESSIONS = os.path.join(ROOT, "data", "sessions.csv")
 CONTEXT = os.path.join(ROOT, "context.md")
@@ -154,8 +168,128 @@ def fnum(r, k):
         return None
 
 
+def hr_constants(sleep, acts):
+    """HR_rest and HR_max for TRIMP, from the accumulated record. -> (rest, max)
+
+    Not from the inbox: the inbox is emptied after every build, so it holds one
+    export at a time. Rated against that alone, a week's sessions would get a
+    max HR seen in three runs and a resting HR from seven nights, and their
+    TRIMP would sit on a different scale from every session before them — no
+    error, just an ACWR that drifts. So: resting HR over a trailing window of
+    daily.csv plus whatever sleep just arrived, and max HR over all of
+    sessions.csv plus what just arrived, since a lower max this month means
+    you didn't go hard, not that the ceiling dropped.
+    """
+    rhr = {}
+    if os.path.exists(DAILY):
+        for r in read_csv(DAILY)[1]:
+            v = fnum(r, "rhr")
+            if v and r.get("date"):
+                rhr[r["date"]] = v
+    for d, v in sleep.items():
+        if v.get("rhr"):
+            rhr[d] = v["rhr"]
+    if rhr:
+        lo = (date.fromisoformat(max(rhr))
+              - timedelta(days=RHR_WINDOW_DAYS - 1)).isoformat()
+        w = [v for d, v in rhr.items() if d >= lo]
+        hr_rest = round(sum(w) / len(w))
+    else:
+        hr_rest = CFG["athlete"]["hr_rest_fallback"]
+
+    seen = [a["max_hr"] for a in acts if a["max_hr"]]
+    if os.path.exists(SESSIONS):
+        seen += [v for v in (fnum(r, "max_hr") for r in read_csv(SESSIONS)[1])
+                 if v]
+    hr_max = CFG["athlete"]["hr_max_override"] or (max(seen or [180]) + 5)
+    return hr_rest, hr_max
+
+
+def _digest(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def archive_inbox(rep):
+    """Move every file this build took rows from into data/archive/<today>/.
+
+    Why: two exports of the same kind in the inbox merge by filename order, and
+    a numbered re-export ('Sleep-2.csv') sorts before the original, so the
+    stale one wins the overlap. One export at a time leaves the upsert as the
+    only merge, and there the newest build wins.
+
+    What moves is exactly what the Ingest table credits with kept rows, so the
+    rule is visible in the output above it. A file that was read but kept
+    nothing stays — its warning is the fix, and it should still be there on the
+    next build. So does anything nothing reads (VO2 max, say), for the same
+    reason. A byte-identical copy of a moved file ('x.fit 2', which Finder
+    makes when a file is dropped twice) moves with it, named as a duplicate,
+    rather than warning on every build forever.
+    """
+    names = sorted(f for f in os.listdir(INBOX)
+                   if not f.startswith(".")
+                   and os.path.isfile(os.path.join(INBOX, f)))
+    kept = {f["file"] for f in rep.files if f["kept"]} & set(names)
+    empty = sorted({f["file"] for f in rep.files if not f["kept"]} & set(names))
+    if not kept:
+        return
+    digests = {_digest(os.path.join(INBOX, f)): f for f in kept}
+    dupes = {}
+    for f in names:
+        if f not in kept:
+            twin = digests.get(_digest(os.path.join(INBOX, f)))
+            if twin:
+                dupes[f] = twin
+
+    dest = os.path.join(ARCHIVE, date.today().isoformat())
+    os.makedirs(dest, exist_ok=True)
+    for f in sorted(kept | set(dupes)):
+        src = os.path.join(INBOX, f)
+        to = os.path.join(dest, f)
+        if os.path.exists(to):
+            if _digest(to) == _digest(src):   # rebuilt today with the same file
+                os.remove(src)
+                continue
+            stem, ext = os.path.splitext(f)
+            n = 2
+            while os.path.exists(to):
+                to = os.path.join(dest, f"{stem} ({n}){ext}")
+                n += 1
+        shutil.move(src, to)   # keeps mtime, which analyze.py sorts by
+
+    rel = os.path.relpath(dest, ROOT)
+    print(f"Archive  {len(kept)} file{'s' if len(kept) != 1 else ''} read "
+          f"-> {rel}/  (inbox is ready for the next export)")
+    for f, twin in sorted(dupes.items()):
+        print(f"  · {f}: identical to {twin} — archived as a duplicate")
+    for f in empty:
+        print(f"  ! {f}: read but no rows kept — left in data/inbox/ "
+              f"(see its warning above)")
+
+
+def cell(r, *keys):
+    """A table cell: the first key with a non-zero value, else '-'.
+
+    Not `r.get(k) or "-"`: a row computed this build holds 0.0, which is falsy,
+    but the same row read back from the CSV holds "0.0", which isn't — so a
+    day's table cell would flip between '-' and '0.0' depending on whether the
+    inbox happened to cover it. Same data, different brief, every other build.
+    """
+    for k in keys:
+        v = r.get(k)
+        if v is None or v in MISSING:
+            continue
+        n = fnum(r, k)
+        if n is None or n != 0:   # non-numeric text, or a real number
+            return v
+    return "-"
+
+
 # --- Main --------------------------------------------------------------------
-def main():
+def main(keep_inbox=False):
     today = date.today()
 
     rep = ingest.Report()
@@ -195,12 +329,7 @@ def main():
               "every aerobic load figure, will be zero. Check what your adapter "
               "maps to avg_hr (python3 -m ingest --check)")
 
-    hr_max = CFG["athlete"]["hr_max_override"] or (
-        max([a["max_hr"] for a in acts if a["max_hr"]] or [180]) + 5
-    )
-    rhrs = [v["rhr"] for v in sleep.values() if v["rhr"]]
-    hr_rest = round(sum(rhrs) / len(rhrs)) if rhrs \
-        else CFG["athlete"]["hr_rest_fallback"]
+    hr_rest, hr_max = hr_constants(sleep, acts)
 
     for a in acts:
         a["trimp"] = trimp(a, hr_rest, hr_max)
@@ -288,6 +417,11 @@ def main():
           f"span={daily[0]['date']}..{daily[-1]['date']}  "
           f"hr_rest={hr_rest} hr_max={hr_max}")
     print(f"    -> {DAILY}\n    -> {SESSIONS}\n    -> {CONTEXT}")
+
+    # Last, so a build that failed anywhere above leaves the inbox untouched
+    # and can simply be run again.
+    if not keep_inbox:
+        archive_inbox(rep)
 
 
 def window(daily, end_d, days):
@@ -407,10 +541,9 @@ def write_context(daily, sess, hr_rest, hr_max, today):
         L.append("| {date} | {dow} | {act} | {rk} | {tr} | {ss} | {rhr} | {hv} | {bb} |".format(
             date=r["date"], dow=r["dow"],
             act=(r.get("activities") or "-")[:34] or "-",
-            rk=r.get("primary_km") or "-", tr=r.get("trimp") or "-",
-            ss=r.get("sleep_score") or "-", rhr=r.get("rhr") or "-",
-            hv=r.get("hrv_night") or r.get("hrv_7d") or "-",
-            bb=r.get("body_battery") or "-"))
+            rk=cell(r, "primary_km"), tr=cell(r, "trimp"),
+            ss=cell(r, "sleep_score"), rhr=cell(r, "rhr"),
+            hv=cell(r, "hrv_night", "hrv_7d"), bb=cell(r, "body_battery")))
     L.append("")
 
     L.append("## Recent sessions\n")
@@ -430,10 +563,10 @@ def write_context(daily, sess, hr_rest, hr_max, today):
             # Blank, not "steady", when the laps couldn't say: analyze.py
             # leaves the field empty rather than guess, and so does this.
             sh=f"{s.get('session_shape') or '—'} | " if shape_col else "",
-            km=s.get("distance_km") or "-", mm=f"{int(secs//60)}:{int(secs%60):02d}",
-            hr=s.get("avg_hr") or "-", te=s.get("aerobic_te") or "-",
-            fmv=(s.get(fm["field"]) if fm["enabled"] else None) or "-",
-            asc=s.get("ascent_m") or "-"))
+            km=cell(s, "distance_km"), mm=f"{int(secs//60)}:{int(secs%60):02d}",
+            hr=cell(s, "avg_hr"), te=cell(s, "aerobic_te"),
+            fmv=cell(s, fm["field"]) if fm["enabled"] else "-",
+            asc=cell(s, "ascent_m")))
     structured = [s for s in sess if s.get("session_shape") == "intervals"
                   and s.get("structure_summary")]
     if structured:
@@ -458,4 +591,7 @@ def write_context(daily, sess, hr_rest, hr_max, today):
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0].strip())
+    ap.add_argument("--keep-inbox", action="store_true",
+                    help="don't move what was read to data/archive/")
+    main(keep_inbox=ap.parse_args().keep_inbox)

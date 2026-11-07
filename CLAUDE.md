@@ -83,24 +83,31 @@ A skipped row with no output becomes "the chart looks wrong" three weeks later.
 that would have fixed it. Same instinct in `build.py` — it prints both rows when
 it sees one workout counted twice, rather than letting the load quietly double.
 
-## Refreshing a raw export
+## The inbox is a queue
 
-Bulk-export files of the same kind in `data/inbox/` merge by filename sort order
-(`ingest/parsers.py:route_files`), not by recency — so when a new export's
-date range overlaps an older file's, whichever name sorts last wins on the
-overlap, silently. A numbered re-export (`Sleep-2.csv`) usually sorts *before*
-the original (`Sleep.csv`), so the stale file wins by default — the opposite
-of what you want.
+After a successful build, `build.py` moves every file it took rows from into
+`data/archive/<date>/` (`--keep-inbox` skips this). Byte-identical copies of a
+moved file (Finder's `x.fit 2`) move with it as duplicates. Files that were
+read but kept nothing, and files nothing reads, stay in the inbox so their
+warning keeps showing.
 
-When a new export of the same kind arrives, don't just drop it alongside the
-old one: check whether it supersedes the old file's date range and, if so,
-retire the old file rather than leaving both to merge. Before deleting,
-confirm the old file's *unique* range (the part the new one doesn't cover) is
-already in `data/daily.csv` from a prior build — the upsert is what makes it
-safe to let a raw export's window slide forward. Then rebuild and say plainly
-what was replaced and why — these are the user's own data files, and a silent
-swap is exactly the kind of thing this repo's "report, don't swallow" instinct
-above is meant to rule out.
+The reason is merge order. Bulk exports of the same kind in the inbox merge by
+filename sort order (`ingest/parsers.py:route_files`), not recency, and a
+numbered re-export (`Sleep-2.csv`) sorts *before* the original, so a stale
+file silently wins an overlap. One export at a time leaves the upsert as the
+only merge, and there the newest build wins.
+
+Two consequences to keep in mind:
+
+- **Anything derived across builds must come from `data/*.csv`, not the
+  inbox.** `hr_constants()` is the example: HR_rest and HR_max from the inbox
+  alone would rescale TRIMP to whatever one export happened to contain.
+  Likewise, anything `context.md` renders must look the same whether a row was
+  computed this build or read back from the CSV (`cell()`).
+- **Moving an archived file back re-reads it**, safely (the upsert is keyed),
+  but its values then beat anything newer for the dates it covers. That's for
+  repairing a bad build, and worth saying plainly to the user when you do it.
+  `analyze.py` with no argument falls back to the newest archived file.
 
 ## Verifying a change
 

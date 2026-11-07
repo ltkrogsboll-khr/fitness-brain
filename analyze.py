@@ -3,7 +3,7 @@
 
     (drop a file in data/inbox/, then just rebuild — see below)
 
-    python3 analyze.py                          # newest activity in data/inbox/
+    python3 analyze.py                          # newest in data/inbox/, else data/archive/
     python3 analyze.py --all                    # every file there, once each
     python3 analyze.py ~/Downloads/1234_ACTIVITY.fit
     python3 analyze.py run.fit --hr-cap 140 --cadence 170
@@ -680,6 +680,16 @@ def resolve(arg, want_all):
             return found if want_all else found[-1:]
         return [arg]
     found = folder_files()
+    if not found and not want_all:
+        # build.py archives what it reads, so after a Rebuild the run you just
+        # did lives here. Not for --all: that means "what's waiting", and
+        # re-analysing the whole history is a path argument away.
+        arch = ingest.ARCHIVE
+        if os.path.isdir(arch):
+            for sub in sorted(os.listdir(arch)):
+                if os.path.isdir(os.path.join(arch, sub)):
+                    found += folder_files(os.path.join(arch, sub))
+            found.sort(key=os.path.getmtime)
     if not found:
         return []
     return found if want_all else found[-1:]

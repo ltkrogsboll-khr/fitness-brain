@@ -57,6 +57,12 @@ DEFAULT_ADAPTER = "garmin_csv"
 # reader claims its files by extension and the adapter declares its own, so
 # "put whatever the watch exported here" is the whole instruction.
 INBOX = os.path.join(ROOT, "data", "inbox")
+# Where build.py moves a file once its rows are in the accumulating CSVs. Never
+# read by a build: an export left in the inbox merges with the next one by
+# filename order, so a stale re-export can win an overlap silently. With one
+# export in the inbox at a time, the upsert's "newest non-empty value wins" is
+# the only merge rule left — which is the recency rule anyone would expect.
+ARCHIVE = os.path.join(ROOT, "data", "archive")
 # Where the two paths used to live. Not read any more — stranded() names any
 # file still sitting in one, because a file that quietly stopped counting is
 # a load chart that's wrong for reasons nobody can see.
